@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gerador de GIFs</title>
+    <style>
+      body { margin: 0; padding: 24px; background: #12141a; color: #e8eaed; font: 14px system-ui, sans-serif; }
+      h1 { margin: 0 0 4px; font-size: 22px; }
+      p { margin: 0 0 16px; color: #9aa0a8; }
+      button { padding: 8px 16px; font: inherit; font-weight: 600; border: 0; border-radius: 6px; background: #c8f560; color: #111; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      #status { margin: 12px 0; font-variant-numeric: tabular-nums; }
+      #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+      figure { margin: 0; padding: 8px; border-radius: 6px; background: #1d2028; }
+      figure img { display: block; width: 100%; image-rendering: pixelated; }
+      figcaption { display: flex; justify-content: space-between; margin-top: 6px; font-size: 12px; color: #9aa0a8; }
+    </style>
+  </head>
+  <body>
+    <h1>GIFs das armas</h1>
+    <p>Renderiza cada modelo girando (25 fps) e salva em <code>client/public/weapons/gifs/</code>. Só funciona com <code>npm run dev</code>.</p>
+    <button id="run">Renderizar todas</button>
+    <div id="status"></div>
+    <div id="grid"></div>
+    <script type="module" src="./gif-renderer.ts"></script>
+  </body>
+</html>
