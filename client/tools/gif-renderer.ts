@@ -8,7 +8,8 @@ import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 import * as THREE from 'three';
 import { AMMO_LABEL, AMMO_TYPES, ammoGifId, buildAmmoModel } from '../src/weapons/models/ammo';
 import { buildWeaponModel } from '../src/weapons/models/registry';
-import type { WeaponModel } from '../src/weapons/models/types';
+import { attachmentGifId, buildAttachmentPreview } from '../src/weapons/models/attachmentPreview';
+import { ATTACHMENTS, type AttachmentId } from '@shared/weapons/attachments';
 
 export const GIF = {
   width: 160,
@@ -47,7 +48,7 @@ readback.height = GIF.height;
 const ctx = readback.getContext('2d', { willReadFrequently: true })!;
 
 /** Coloca o modelo deitado/centralizado na plataforma e enquadra a câmera. */
-function stage(model: WeaponModel, layDown: boolean): void {
+function stage(model: { root: THREE.Object3D }, layDown: boolean): void {
   turntable.clear();
   const holder = new THREE.Group();
   holder.add(model.root);
@@ -98,7 +99,7 @@ export function encodeWeaponGif(def: WeaponDef): Uint8Array {
   return encodeModelGif(buildWeaponModel(def.id), def.kind === 'melee');
 }
 
-export function encodeModelGif(model: WeaponModel, layDown = false): Uint8Array {
+export function encodeModelGif(model: { root: THREE.Object3D }, layDown = false): Uint8Array {
   stage(model, layDown);
   const frames: Uint8ClampedArray[] = [];
   for (let i = 0; i < GIF.frames; i++) frames.push(captureFrame((i / GIF.frames) * Math.PI * 2));
@@ -181,6 +182,31 @@ async function renderAmmo(): Promise<{ count: number; bytes: number }> {
   return { count: AMMO_TYPES.length, bytes: total };
 }
 (window as unknown as { renderAmmo: typeof renderAmmo }).renderAmmo = renderAmmo;
+
+/** GIFs dos acessórios (menu T): cada peça sozinha, girando. */
+async function renderAttachments(): Promise<{ count: number; bytes: number }> {
+  const status = document.getElementById('status')!;
+  const grid = document.getElementById('grid')!;
+  const ids = Object.keys(ATTACHMENTS) as AttachmentId[];
+  let total = 0;
+  for (const [i, id] of ids.entries()) {
+    status.textContent = `Acessório ${i + 1}/${ids.length}: ${ATTACHMENTS[id].name}…`;
+    await new Promise((r) => setTimeout(r, 0));
+    const bytes = encodeModelGif(buildAttachmentPreview(id));
+    await save(attachmentGifId(id), bytes);
+    total += bytes.length;
+    const fig = document.createElement('figure');
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/gif' }));
+    fig.append(img);
+    fig.insertAdjacentHTML('beforeend', `<figcaption><span>${ATTACHMENTS[id].name}</span><span>${(bytes.length / 1024).toFixed(1)} KB</span></figcaption>`);
+    grid.append(fig);
+  }
+  status.textContent = `✓ ${ids.length} acessórios salvos — ${(total / 1024).toFixed(0)} KB`;
+  return { count: ids.length, bytes: total };
+}
+(window as unknown as { renderAttachments: typeof renderAttachments }).renderAttachments = renderAttachments;
+document.getElementById('run-att')?.addEventListener('click', () => void renderAttachments());
 
 document.getElementById('run-ammo')?.addEventListener('click', () => void renderAmmo());
 

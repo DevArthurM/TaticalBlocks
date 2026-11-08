@@ -18,6 +18,14 @@ export interface GridHit {
  * voxels (InstancedMesh). Guarda quais voxels existem, gera colisores fundindo voxels
  * em cuboides e faz raycast percorrendo a grade (DDA).
  */
+/** Hash [0,1) do voxel e do centro do impacto (quantizado em 1/64 m). */
+function edgeNoise(i: number, c: THREE.Vector3): number {
+  let h = Math.imul(i, 374761393) ^ Math.imul(Math.round(c.x * 64), 668265263) ^ Math.imul(Math.round(c.y * 64), 2147483647) ^ Math.imul(Math.round(c.z * 64), 1274126177);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
 export class VoxelBlock {
   readonly nx: number;
   readonly ny: number;
@@ -136,6 +144,25 @@ export class VoxelBlock {
     return mesh;
   }
 
+  /** Volta ao bloco inteiro (nova partida): todos os voxels de volta, vida cheia. */
+  reset(): void {
+    this.solid.fill(1);
+    this.hp.fill(this.material.hp);
+    this.alive = this.solid.length;
+    this.colliders = [this.bounds.clone()];
+    this.dirty = false;
+    this.recheck = false;
+    const mesh = this.instanced;
+    if (!mesh) return;
+    const s = this.cell;
+    for (let i = 0; i < this.solid.length; i++) {
+      this.center(i, this.tmp);
+      this.m.makeScale(s.x, s.y, s.z).setPosition(this.tmp);
+      mesh.setMatrixAt(i, this.m);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
   /** Índice do voxel que contém `p` (ou null fora da grade). */
   cellAt(p: THREE.Vector3): number | null {
     const x = Math.floor((p.x - this.min.x) / this.cell.x);
@@ -167,7 +194,8 @@ export class VoxelBlock {
           if (!this.solid[i]) continue;
           const d = this.center(i, this.tmp).distanceTo(center) / radius;
           // queda quadrática: o miolo da esfera leva quase o dano cheio
-          let falloff = 1 - d * d + (Math.random() - 0.5) * 2 * roughness;
+          // ruído determinístico (voxel + ponto do impacto): o mesmo tiro abre o mesmo buraco em todas as máquinas
+          let falloff = 1 - d * d + (edgeNoise(i, center) - 0.5) * 2 * roughness;
           if (i === seed) falloff = Math.max(falloff, 1);
           if (falloff <= 0) continue;
           this.hp[i] -= power * Math.min(1, falloff);

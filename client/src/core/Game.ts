@@ -8,6 +8,11 @@ import { ApiClient } from '../net/ApiClient';
 import { Debris } from '../physics/Debris';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerBody } from '../player/PlayerBody';
+import { DeathCam } from '../player/DeathCam';
+import { type GameMode, MODES } from '@shared/net/protocol';
+import { MainMenu } from '../ui/main/MainMenu';
+import { type AttachmentSlot, encodeAttachments } from '@shared/weapons/attachments';
+import { Footsteps } from '../audio/Footsteps';
 import { PlayerController } from '../player/PlayerController';
 import { HUD, type InspectView } from '../ui/HUD';
 import { effectiveFov, SHADOW_MAP_SIZE, SettingsStore } from '../settings/Settings';
@@ -21,6 +26,13 @@ import { Barricades } from '../world/Barricades';
 import { Crates } from '../world/Crates';
 import { DestructionSystem } from '../world/destruction/DestructionSystem';
 import { World } from '../world/World';
+import { NetClient } from '../online/NetClient';
+import { OnlineSession } from '../online/OnlineSession';
+import { soldierMaterials } from '../online/avatar/SoldierModel';
+import { OnlineHud } from '../ui/online/OnlineHud';
+import { OnlineMenu } from '../ui/online/OnlineMenu';
+import { AttachmentEditor } from '../ui/attachments/AttachmentEditor';
+import { findWeapon } from '@shared/weapons/catalog';
 import { ZombieInstancer } from '../enemies/zombie/ZombieInstancer';
 import { ZOMBIE_UNIT_BOX, zombieMaterials } from '../enemies/zombie/ZombieModel';
 import { Input, KEYS } from './Input';
@@ -28,12 +40,33 @@ import { RendererSystem } from './RendererSystem';
 
 /** Segundos parado mirando até o túnel de foco fechar por completo. */
 const FOCUS_BUILD_TIME = 2.5;
+/** Graus a mais de FOV no deslize. */
+const SLIDE_FOV = 7;
 /** Tempo máximo esperando a pré-compilação de shaders antes de começar. */
 const WARMUP_TIMEOUT_MS = 6000;
 /** Segundos segurando F por tábua pregada. */
 const REPAIR_TIME = 0.55;
+/** Offline: segundos caído no chão antes de renascer. */
+const RESPAWN_DELAY = 3;
 
 /** Orquestra os sistemas e o loop principal. */
+/** sessionStorage: sala escolhida no menu principal, lida (e apagada) no próximo carregamento. */
+const PENDING_JOIN_KEY = 'fps.pendingJoin';
+
+/** Lê e apaga a sala pendente: recarregar de novo volta ao menu principal. */
+function takePendingJoin(): { mode: GameMode; room?: string } | null {
+  // endereços antigos (`/?online…`): tudo fica na rota `/`
+  if (location.search) history.replaceState(null, '', location.pathname);
+  try {
+    const raw = sessionStorage.getItem(PENDING_JOIN_KEY);
+    sessionStorage.removeItem(PENDING_JOIN_KEY);
+    const v = raw ? (JSON.parse(raw) as { mode?: string; room?: string }) : null;
+    return v?.mode && v.mode in MODES ? { mode: v.mode as GameMode, room: typeof v.room === 'string' ? v.room : undefined } : null;
+  } catch {
+    return null;
+  }
+}
+
 export class Game {
   private readonly gfx: RendererSystem;
   private readonly input: Input;
@@ -49,6 +82,23 @@ export class Game {
   private zombies!: ZombieDirector;
   private world!: World;
   private barricades: Barricades | null = null;
+  /**
+   * Sala escolhida no menu principal: guardada só para o próximo carregamento da
+   * página (mesma rota `/`, sem nada no endereço). Existe = modo online.
+   */
+  private readonly pendingJoin = takePendingJoin();
+  /** Modo online: só o Pátio Voxel, sem zumbis, dano decidido pelo servidor. */
+  private readonly onlineMode = this.pendingJoin !== null;
+  private session: OnlineSession | null = null;
+  private deathCam!: DeathCam;
+  /** Menu principal (só no modo offline; o online tem o próprio menu de salas). */
+  private mainMenu: MainMenu | null = null;
+  private readonly footsteps = new Footsteps();
+  /** Offline: segundos até renascer (> 0 = morto, câmera caída). */
+  private respawnTimer = 0;
+  /** Gun Game: arma imposta pelo servidor (sem menu de loadout). */
+  private forcedLoadout = false;
+  private attachMenu!: AttachmentEditor;
   private repairTimer = 0;
   private spawn = new THREE.Vector3();
   private weapons!: WeaponManager;
@@ -68,7 +118,7 @@ export class Game {
   }
 
   async start(): Promise<void> {
-    const [map, catalog, loadout] = await Promise.all([this.api.loadMap(new URLSearchParams(location.search).get('mapa') ?? 'voxel'), this.api.loadCatalog(), this.api.loadLoadout()]);
+    const [map, catalog, loadout] = await Promise.all([this.api.loadMap(), this.api.loadCatalog(), this.api.loadLoadout()]);
     this.catalog = catalog.data;
 
     const world = new World(this.gfx.scene, map.data, this.gfx.maxAnisotropy);
@@ -80,9 +130,10 @@ export class Game {
     // física + caixas de madeira + blocos destrutíveis
     this.physics = new PhysicsWorld();
     this.debris = new Debris(this.gfx.scene, this.physics);
+    this.deathCam = new DeathCam(this.physics, this.gfx.camera, world.colliders);
     this.crates = new Crates(this.gfx.scene, this.physics, world.colliders, map.data.crates);
     this.world = world;
-    // janelas/portas com tábuas (mapa do hospital)
+    // janelas/portas com tábuas (se o mapa tiver)
     if (map.data.barricades?.length) this.barricades = new Barricades(this.gfx.scene, map.data.barricades, this.audio);
     world.hitTargets.push(...this.crates.meshes);
     this.destruction = new DestructionSystem(world, this.physics, this.debris, this.particles, decals, this.audio, [
@@ -100,6 +151,7 @@ export class Game {
         this.debris.blast(pos, radius, 8);
         this.zombies.blast(pos, radius * 1.1, 160);
       },
+      detonated: (kind, pos, source) => this.session?.onDetonated(kind, pos, source),
     });
     this.projectiles = new Projectiles(this.gfx.scene, world.hitTargets, this.explosions, this.particles, this.audio);
     this.weapons = new WeaponManager({
@@ -114,15 +166,25 @@ export class Game {
       decals,
       explosions: this.explosions,
       projectiles: this.projectiles,
-      onHit: (hit, dir, damage) => this.destruction.hit(hit, dir, damage) || this.crates.hit(hit, dir, damage),
-      enemies: { shoot: (o, d, far, dmg) => this.zombies.shoot(o, d, far, dmg) },
+      onHit: (hit, dir, damage) => {
+        if (this.destruction.hit(hit, dir, damage)) {
+          // online: os outros jogadores reproduzem a destruição
+          this.session?.onWorldImpact(hit.point, dir, damage);
+          return true;
+        }
+        return this.crates.hit(hit, dir, damage);
+      },
+      enemies: {
+        shoot: (o, d, far, dmg, meta) => (this.session ? this.session.shoot(o, d, far, dmg, meta) : this.zombies.shoot(o, d, far, dmg)),
+      },
+      onShot: (weapon, origin, dir, pellets) => this.session?.onShot(weapon, origin, dir, pellets),
     });
 
     // zumbis em ondas (1, 2, 4, 8, 16, 32)
     this.spawn.set(map.data.spawn.x, map.data.spawn.y, map.data.spawn.z);
     // todos os zumbis desenhados por instância (~7 draw calls no total)
     const zombieInstances = new ZombieInstancer(this.gfx.scene, ZOMBIE_UNIT_BOX);
-    zombieInstances.prepare(zombieMaterials());
+    zombieInstances.prepare(this.onlineMode ? soldierMaterials() : zombieMaterials());
     this.gfx.beforeRender = () => zombieInstances.sync();
     this.zombies = new ZombieDirector(
       this.gfx.scene,
@@ -133,8 +195,10 @@ export class Game {
       world.colliders,
       this.player,
       {
-        onPlayerHit: (dmg) => {
+        onPlayerHit: (dmg, from) => {
+          if (this.respawnTimer > 0) return;
           this.player.damage(dmg);
+          this.hud.damageFrom(from.x, from.z);
           this.audio.play('playerHurt', 0.6);
         },
         onWave: (wave, count) => this.hud.announce(`ONDA ${wave}`, `${count} ${count === 1 ? 'zumbi' : 'zumbis'}`),
@@ -143,12 +207,12 @@ export class Game {
       this.barricades,
     );
     this.weapons.viewmodel.setLightScale(world.env.viewmodelLight);
-    this.hud.onSelectMap = (mode) => {
-      const url = new URL(location.href);
-      url.searchParams.set('mapa', mode);
-      location.href = url.toString();
+    this.hud.setOnlineMode(this.onlineMode);
+    // sair da partida: volta ao menu principal (online: desconecta; solo: recomeça do zero)
+    this.hud.onExitMatch = () => {
+      location.href = location.pathname;
     };
-    this.hud.setMapChoice(map.data.environment === 'hospital' ? 'hospital' : 'voxel');
+    if (this.onlineMode) this.setupOnline(decals);
 
     const online = map.source === 'server' && catalog.source === 'server';
     this.hud.setStatus(map.data.name, online ? 'server' : 'local');
@@ -171,21 +235,71 @@ export class Game {
       this.gfx.setViewmodelFovFor(fov);
       this.weapons.aimMode = s.aimMode;
     });
+    // personalização da arma (T)
+    this.attachMenu = new AttachmentEditor(this.container);
+    this.attachMenu.onChange = (id, att) => this.weapons.setAttachments(id, att);
+    this.attachMenu.onPreview = (att) => this.weapons.previewAttachments(att);
+    this.attachMenu.onClose = () => this.setCustomizeOpen(false);
+    this.weapons.onCustomizeRequest = () => this.setCustomizeOpen(true);
     this.settingsMenu = new SettingsMenu(this.container, this.settings);
     this.settingsMenu.onClose = () => this.setSettingsOpen(false);
     this.hud.onOpenSettings = () => this.setSettingsOpen(true);
 
+    // menu principal: nome, jogar online, zumbis solo, configurações + soldado 3D
+    if (!this.onlineMode) {
+      const main = new MainMenu(this.container, this.catalog);
+      // sala escolhida na lista do menu: abre o jogo online já entrando nela
+      main.onJoinOnline = (_name, mode, room) => {
+        try {
+          sessionStorage.setItem(PENDING_JOIN_KEY, JSON.stringify({ mode, room }));
+        } catch {
+          /* sem armazenamento: não há como levar a escolha */
+        }
+        location.reload();
+      };
+      main.onPlaySolo = () => {
+        main.setOpen(false);
+        this.audio.unlock();
+        Promise.resolve(this.gfx.canvas.requestPointerLock()).catch(() => this.hud.setPaused(true));
+      };
+      main.onSettings = () => {
+        main.setDimmed(true);
+        this.setSettingsOpen(true);
+      };
+      this.mainMenu = main;
+      main.setOpen(true);
+      this.hud.setPaused(false);
+    }
+    this.hud.onMainMenu = () => {
+      if (!this.mainMenu) {
+        location.href = location.pathname; // online: sai da partida e volta ao menu principal
+        return;
+      }
+      this.hud.setPaused(false);
+      this.mainMenu.setOpen(true);
+    };
+
     this.input.onLockChange((locked) => {
       if (locked) this.settingsMenu.setOpen(false);
-      this.hud.setPaused(!locked && !this.menu.isOpen && !this.settingsMenu.isOpen);
+      this.hud.setPaused(!locked && !this.menu.isOpen && !this.settingsMenu.isOpen && !this.attachMenu.isOpen && !this.mainMenu?.isOpen);
       if (locked) {
         this.audio.unlock();
         this.menu.setOpen(false);
       }
     });
+    // menu T aberto e o jogo perde o foco (troca de janela/aba): volta ao modo de combate
+    const leaveCustomize = () => {
+      if (!this.attachMenu.isOpen) return;
+      this.setCustomizeOpen(false);
+      // sem foco o pointer lock não volta sozinho: mostra a pausa (clicar retoma o jogo)
+      if (!this.input.locked) this.hud.setPaused(true);
+    };
+    window.addEventListener('blur', leaveCustomize);
+    document.addEventListener('visibilitychange', () => document.hidden && leaveCustomize());
     // B também precisa funcionar com o menu aberto (sem pointer lock)
     window.addEventListener('keydown', (e) => {
-      if ((e.code === KEYS.loadout || e.code === 'Escape') && this.menu.isOpen) this.toggleMenu();
+      if ((e.code === KEYS.customize || e.code === 'Escape') && this.attachMenu.isOpen) this.setCustomizeOpen(false);
+      else if ((e.code === KEYS.loadout || e.code === 'Escape') && this.menu.isOpen) this.toggleMenu();
       else if (e.code === 'Escape' && this.settingsMenu.isOpen) this.setSettingsOpen(false);
     });
 
@@ -203,13 +317,40 @@ export class Game {
     if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = this;
   }
 
+  /** T: arma na frente da câmera, fundo desfocado e menu de acessórios (mouse livre). */
+  private setCustomizeOpen(open: boolean): void {
+    if (open === this.attachMenu.isOpen) return;
+    this.weapons.setCustomizing(open);
+    this.hud.setCustomizing(open);
+    if (open) {
+      const held = this.weapons.held;
+      const def = held ? (findWeapon(held.def.id) ?? null) : null;
+      this.attachMenu.open(def, held ? this.weapons.attachmentStore.get(held.def.id) : {});
+      if (document.pointerLockElement) document.exitPointerLock();
+    } else {
+      this.attachMenu.close();
+      // sem foco na janela o pedido falha: ignora (a tela de pausa cuida de retomar)
+      Promise.resolve(this.gfx.canvas.requestPointerLock()).catch(() => {});
+    }
+  }
+
   private setSettingsOpen(open: boolean): void {
     this.settingsMenu.setOpen(open);
+    // aberta pelo menu principal: fechando, volta para ele
+    if (!open && this.mainMenu?.isOpen) {
+      this.mainMenu.setDimmed(false);
+      this.hud.setPaused(false);
+      return;
+    }
     // fechando, volta para a tela de pausa (clicar no jogo retoma)
     this.hud.setPaused(!open && !this.input.locked);
   }
 
   private toggleMenu(): void {
+    if (this.forcedLoadout && !this.menu.isOpen) {
+      this.hud.announce('GUN GAME', 'a arma é definida pelo seu nível');
+      return;
+    }
     const open = !this.menu.isOpen;
     if (open) this.menu.setLoadout(this.weapons.inventory.loadout);
     this.menu.setOpen(open);
@@ -233,9 +374,14 @@ export class Game {
     this.gfx.adaptResolution(rawDt);
     this.time += dt;
 
-    if (this.input.wasPressed(KEYS.loadout)) this.toggleMenu();
+    // no menu principal o jogo fica parado ao fundo (sem controles nem zumbis)
+    // menu principal aberto ou contagem 3-2-1 do online: sem controles
+    const inMenu = (this.mainMenu?.isOpen ?? false) || (this.session?.frozen ?? false);
+    if (!inMenu && this.input.wasPressed(KEYS.loadout)) this.toggleMenu();
 
-    this.player.update(dt, this.input, { aiming: this.weapons.aiming, canSprint: true });
+    const dead = this.session ? this.session.dead : this.respawnTimer > 0;
+    this.updateDeathCam(dead);
+    if (!dead && !inMenu) this.player.update(dt, this.input, { aiming: this.weapons.aiming, canSprint: true });
     this.body.update(dt, {
       position: this.player.position,
       velocity: this.player.velocity,
@@ -243,31 +389,148 @@ export class Game {
       onGround: this.player.onGround,
       crouch: this.player.crouchAmount,
       lean: this.player.leanAmount,
+      slide: this.player.slideAmount,
+      pitch: this.player.pitch,
     });
+    const held = this.weapons.held;
+    this.body.setWeapon(dead ? null : (held?.def.id ?? null), held?.kind === 'firearm' ? encodeAttachments(this.weapons.currentAttachments) : '');
+    this.updateSlideFx(dt);
+    this.audio.setListener(this.gfx.camera.position.x, this.gfx.camera.position.z, this.player.yaw);
+    if (!dead) this.updateFootsteps(dt);
     this.crates.push(this.player.position, 0.35, 1.7, this.player.pushVelocity);
-    this.weapons.update(dt, this.time, this.input);
-    this.zombies.update(dt);
-    this.checkDeath();
+    if (!dead && !inMenu) this.weapons.update(dt, this.time, this.input);
+    if (this.session) this.session.update(dt, this.input.isDown('Tab'));
+    else if (!inMenu) {
+      this.zombies.update(dt);
+      this.checkDeath(dt);
+    }
     this.projectiles.update(dt);
     this.destruction.update();
     this.physics.step(dt);
     this.crates.update();
     this.debris.update(dt);
+    this.deathCam.update(dt);
     this.explosions.update(dt, this.time);
     this.particles.update(dt);
     this.world.env.update(dt, this.time, this.gfx.camera.position);
     this.barricades?.update(dt);
 
-    this.gfx.setFov(this.weapons.fov);
+    // deslize: FOV abre um pouco (sensação de velocidade)
+    this.gfx.setFov(this.weapons.fov + this.player.slideAmount * SLIDE_FOV);
+    this.gfx.worldBlur = this.weapons.customizeT;
     this.updateFocus(dt);
     const repairPrompt = this.updateRepair(dt);
     this.hud.setPrompt(
       this.player.ledgePhase === 'hang' ? '<kbd>W</kbd> escalar · solte <kbd>Espaço</kbd> para cair' : repairPrompt,
     );
     this.updateHud(dt);
-    this.gfx.render();
+    if (this.attachMenu.isOpen) this.updateAttachmentEditor();
+    // com o menu principal aberto o jogo fica escondido: nem desenha
+    if (!this.mainMenu?.isOpen) this.gfx.render();
     this.input.endFrame();
   };
+
+  /** Modo online: menu de salas, conexão e sessão de partida. */
+  private setupOnline(decals: Decals): void {
+    const net = new NetClient();
+    const hud = new OnlineHud(this.container);
+    const menu = new OnlineMenu(this.container);
+    this.player.regen = false;
+    this.session = new OnlineSession({
+      net,
+      scene: this.gfx.scene,
+      camera: this.gfx.camera,
+      physics: this.physics,
+      player: this.player,
+      weapons: this.weapons,
+      projectiles: this.projectiles,
+      destruction: this.destruction,
+      hitTargets: this.world.hitTargets,
+      particles: this.particles,
+      decals,
+      audio: this.audio,
+      hud,
+    });
+    // Gun Game: troca a arma na mão pela do nível (loadout só local, não é salvo)
+    this.session.onHurtFrom = (x, z) => this.hud.damageFrom(x, z);
+    // nova partida (3-2-1): o mapa volta inteiro, sem buracos nem detritos
+    this.session.onRestart = () => this.destruction.reset();
+    this.session.onForcedWeapon = (weapon, level, demoted) => {
+      this.forcedLoadout = true;
+      const def = findWeapon(weapon);
+      const slot = def?.kind === 'melee' ? 'melee' : def?.slot === 'secondary' ? 'secondary' : 'primary';
+      this.weapons.setLoadout({
+        primary: slot === 'primary' ? weapon : null,
+        secondary: slot === 'secondary' ? weapon : null,
+        melee: 'knife',
+        grenade: { type: null, count: 0 },
+      });
+      this.weapons.equip(slot, true);
+      if (level > 0 || demoted) this.hud.announce(demoted ? 'REBAIXADO' : `NÍVEL ${level + 1}`, def?.name ?? weapon);
+    };
+    net.on('rooms', ({ rooms }) => menu.setRooms(rooms));
+    net.on('error', ({ message }) => menu.setStatus(message, true));
+    net.on('joined', (j) => {
+      this.session!.start(j);
+      menu.setOpen(false);
+      menu.setStatus('');
+      this.hud.setStatus(`${j.room.name} · ${j.room.mode}`, 'server');
+      this.hud.setPaused(true);
+    });
+    net.onClose = () => {
+      menu.setStatus('Conexão com o servidor perdida. Recarregue a página.', true);
+      menu.setOpen(true);
+      if (document.pointerLockElement) document.exitPointerLock();
+    };
+    const connect = () =>
+      net.connect().catch((e: Error) => {
+        menu.setStatus(e.message, true);
+        throw e;
+      });
+    menu.onRefresh = () => void connect().then(() => net.send('rooms', {})).catch(() => {});
+    menu.onJoin = (name, mode, room) => {
+      menu.setStatus('Entrando…');
+      void connect()
+        .then(() => {
+          net.send('hello', { name });
+          net.send('join', { mode, room });
+        })
+        .catch(() => {});
+    };
+    menu.onOffline = () => {
+      location.href = location.pathname;
+    };
+    setInterval(() => {
+      if (menu.open && net.connected) net.send('rooms', {});
+    }, 3000);
+    // vindo da lista de servidores do menu principal: entra direto na sala escolhida
+    const join = this.pendingJoin;
+    if (join) {
+      menu.setOpen(false);
+      menu.onJoin(menu.playerName, join.mode, join.room);
+      // falhou (sala cheia/sumiu, servidor fora): mostra o menu de salas
+      net.on('error', () => menu.setOpen(true));
+    } else menu.setOpen(true);
+  }
+
+  /** Deslize: som de atrito no início e poeira saindo dos pés. */
+  private updateSlideFx(dt: number): void {
+    const p = this.player;
+    if (p.slideStarted) this.audio.play('slide', 0.8);
+    if (!p.sliding || Math.random() > dt * 40) return;
+    const v = p.velocity;
+    const at = this.slideFxPos.set(p.position.x + (Math.random() - 0.5) * 0.3, 0.05, p.position.z + (Math.random() - 0.5) * 0.3);
+    this.particles.emit('dust', at, this.slideFxVel.set(-v.x * 0.15 + (Math.random() - 0.5), 0.4 + Math.random() * 0.4, -v.z * 0.15 + (Math.random() - 0.5)), {
+      life: 0.7,
+      size: 0.14,
+      grow: 2.2,
+      drag: 2.5,
+      color: 0xb9b6ad,
+    });
+  }
+
+  private readonly slideFxPos = new THREE.Vector3();
+  private readonly slideFxVel = new THREE.Vector3();
 
   /** Segurar F perto de uma janela/porta danificada prega as tábuas de volta. */
   private updateRepair(dt: number): string | null {
@@ -290,15 +553,64 @@ export class Game {
     return `<kbd>F</kbd> segure para pregar tábuas na ${label} · ${b.count}/${b.max}`;
   }
 
-  /** Morreu: renasce no spawn e as ondas recomeçam. */
-  private checkDeath(): void {
+  /** Passos do próprio jogador (mais baixos que os dos outros; agachado quase mudo). */
+  private updateFootsteps(dt: number): void {
+    const p = this.player;
+    const sound = this.footsteps.update(dt, p.sliding ? 0 : p.horizontalSpeed, p.onGround && p.ledgePhase === null, p.sprinting);
+    if (sound) this.audio.play(sound, p.crouchAmount > 0.5 ? 0.07 : 0.22);
+  }
+
+  private readonly slotScreen = new THREE.Vector3();
+  /** Editor do T: projeta cada encaixe da arma na tela (linhas e quadrados seguem o balanço). */
+  private updateAttachmentEditor(): void {
+    const cam = this.gfx.viewmodelCamera;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const points: Partial<Record<AttachmentSlot, { x: number; y: number }>> = {};
+    for (const [slot, p] of Object.entries(this.weapons.viewmodel.slotPoints()) as [AttachmentSlot, THREE.Vector3][]) {
+      const v = this.slotScreen.copy(p).project(cam);
+      if (v.z > 1) continue;
+      points[slot] = { x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h };
+    }
+    this.attachMenu.update(points);
+  }
+
+  /** Liga/desliga a câmera de morte (cai com física) e esconde arma, pernas e mira. */
+  private updateDeathCam(dead: boolean): void {
+    if (dead === this.deathCam.active) return;
+    if (dead) {
+      // morreu com o editor do T aberto: fecha (a arma some na câmera de morte)
+      if (this.attachMenu.isOpen) this.setCustomizeOpen(false);
+      this.deathCam.start(this.player.velocity, this.session?.deathDir ?? null);
+      // solta a mira/luneta/inspeção e cancela a recarga (renasce sacando a arma)
+      this.weapons.equip(this.weapons.activeSlot, true);
+    }
+    else this.deathCam.stop();
+    this.gfx.viewmodelScene.visible = !dead;
+    this.body.root.visible = !dead;
+    this.hud.setCustomizing(dead || this.weapons.customizing);
+  }
+
+  /** Morreu: a câmera cai no chão; depois renasce no spawn e as ondas recomeçam. */
+  private checkDeath(dt: number): void {
+    if (this.respawnTimer > 0) {
+      this.respawnTimer -= dt;
+      if (this.respawnTimer <= 0) this.respawnOffline();
+      return;
+    }
     if (this.player.health > 0) return;
+    this.respawnTimer = RESPAWN_DELAY;
+    this.audio.play('playerHurt', 1);
+    this.hud.announce('VOCÊ MORREU', 'as ondas recomeçam');
+  }
+
+  private respawnOffline(): void {
+    this.respawnTimer = 0;
     this.player.position.copy(this.spawn);
     this.player.velocity.set(0, 0, 0);
     this.player.health = 100;
     this.player.hurt = 1;
     this.zombies.reset();
-    this.hud.announce('VOCÊ MORREU', 'as ondas recomeçam');
   }
 
   /** 0..1 — quanto tempo o jogador está parado mirando (fecha o túnel de foco). */
@@ -318,12 +630,14 @@ export class Game {
     else this.stillT = Math.max(0, this.stillT - dt * (moving ? 2.5 : 4));
     const ads = w.scoped ? 0 : w.adsT;
     this.tunnel = ads * (0.3 + 0.7 * this.stillT);
-    this.gfx.focus = ads * (0.75 + 0.25 * this.stillT);
+    // com mira acoplada a imagem fica toda nítida (o desfoque é da alça/massa de ferro)
+    this.gfx.focus = this.weapons.hasOptic ? 0 : ads * (0.75 + 0.25 * this.stillT);
   }
 
   private updateHud(dt: number): void {
     const w = this.weapons;
     const cam = this.gfx.camera;
+    this.hud.updateDamageDir(cam.position.x, cam.position.z, this.player.yaw, dt);
     // px por unidade de tangente (mesmo valor na horizontal e na vertical em projeção perspectiva)
     const pxPerRad = window.innerHeight / 2 / Math.tan(THREE.MathUtils.degToRad(cam.fov / 2));
 
@@ -340,10 +654,9 @@ export class Game {
         aiming: w.adsT > 0.3,
         sprinting: this.player.sprinting,
         scoped: w.scoped,
-        // mirando e andando de lado: ponto central aparece conforme o braço inclina
-        adsDot: w.scoped ? 0 : w.adsT * Math.min(1, w.viewmodel.strafeTilt / 0.6),
         tunnel: this.tunnel,
         hurt: Math.max(this.player.hurt, (1 - this.player.health / 100) * 0.7),
+        round: w.held?.def.category === 'shotgun',
       },
       inspect,
       dt,

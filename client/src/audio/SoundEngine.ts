@@ -46,8 +46,12 @@ export type SoundName =
   | 'zombieAttack'
   | 'zombieDeath'
   | 'playerHurt'
+  | 'step'
+  | 'stepRun'
   | 'boardBreak'
-  | 'hammer';
+  | 'hammer'
+  | 'hitmarker'
+  | 'slide';
 
 interface ShotSpec {
   /** Volume do estampido de ruído. */
@@ -78,6 +82,12 @@ export class SoundEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
+  /** Destino dos sons em síntese (master, ou um panner durante `at`). */
+  private out: AudioNode | null = null;
+  /** Ouvinte (câmera) para sons posicionados. */
+  private listenerX = 0;
+  private listenerZ = 0;
+  private listenerYaw = 0;
 
   unlock(): void {
     if (!this.ctx) {
@@ -91,10 +101,60 @@ export class SoundEngine {
     if (this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
+  /** Posição/direção do ouvinte (chamar todo quadro). */
+  setListener(x: number, z: number, yaw: number): void {
+    this.listenerX = x;
+    this.listenerZ = z;
+    this.listenerYaw = yaw;
+  }
+
+  /**
+   * Toca `fn` como se viesse do ponto (x, z): volume cai com a distância até `range`,
+   * panorâmica esquerda/direita pela direção e agudos abafados de longe.
+   * @returns false se estiver longe demais para ouvir
+   */
+  at(x: number, z: number, range: number, fn: (volume: number) => void): boolean {
+    if (!this.ready()) return false;
+    const dx = x - this.listenerX;
+    const dz = z - this.listenerZ;
+    const dist = Math.hypot(dx, dz);
+    if (dist > range) return false;
+    const ctx = this.ctx!;
+    const fx = -Math.sin(this.listenerYaw);
+    const fz = -Math.cos(this.listenerYaw);
+    const side = dist > 0.01 ? (dx * -fz + dz * fx) / dist : 0; // -1 esquerda … 1 direita
+    const near = 1 - dist / range;
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = side * Math.min(0.85, 0.25 + dist / 12);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1200 + 16000 * near * near;
+    pan.connect(lp).connect(this.master!);
+    this.out = pan;
+    try {
+      fn(Math.max(0.02, near * near * 0.85 + near * 0.15));
+    } finally {
+      this.out = null;
+    }
+    // libera os nós quando os sons terminam
+    setTimeout(() => {
+      pan.disconnect();
+      lp.disconnect();
+    }, 3000);
+    return true;
+  }
+
   /** `volume` < 1 para sons distantes. */
-  shot(profile: SoundProfile, volume = 1): void {
+  /** `suppressed`: silenciador — estalo abafado e grave, bem mais baixo. */
+  shot(profile: SoundProfile, volume = 1, suppressed = false): void {
     if (!this.ready()) return;
     const s = SHOTS[profile];
+    if (suppressed) {
+      this.noiseBurst({ filter: 'lowpass', freq: Math.min(1800, s.bright * 0.3), endFreq: 300, vol: s.crack * volume * 0.32, dur: s.decay * 0.55 });
+      this.tone(s.thumpFreq * 0.8, s.decay * 0.4, s.thump * volume * 0.25, 'sine', 0.4);
+      this.click(5200, 0.012, 0.2 * volume); // mecânica da arma
+      return;
+    }
     this.noiseBurst({ filter: 'lowpass', freq: s.bright, endFreq: 400, vol: s.crack * volume, dur: s.decay });
     this.tone(s.thumpFreq, s.decay * 0.7, s.thump * volume, 'sine', 0.3);
     if (profile === 'rocket') this.noiseBurst({ filter: 'bandpass', freq: 900, vol: 0.6 * volume, dur: 1.1, q: 0.6 });
@@ -211,6 +271,14 @@ export class SoundEngine {
       case 'zombieDeath':
         this.tone(95, 0.7, 0.3 * v, 'sawtooth', 0.4);
         return this.noiseBurst({ filter: 'lowpass', freq: 700, endFreq: 120, vol: 0.3 * v, dur: 0.6 });
+      case 'slide':
+        // atrito longo no chão (ruído grave que vai sumindo) + tecido
+        this.noiseBurst({ filter: 'lowpass', freq: 900, endFreq: 260, vol: 0.55 * v, dur: 0.75, q: 0.7 });
+        return this.noiseBurst({ filter: 'bandpass', freq: 2600, endFreq: 1400, vol: 0.18 * v, dur: 0.35, q: 1.2 });
+      case 'hitmarker':
+        // estalo seco e agudo (confirmação de acerto)
+        this.click(3200, 0.025, 0.55 * v);
+        return this.tone(1900, 0.05, 0.25 * v, 'square', 0.6);
       case 'boardBreak':
         this.noiseBurst({ filter: 'bandpass', freq: 900, endFreq: 300, vol: 0.7 * v, dur: 0.18, q: 1.5 });
         for (let i = 0; i < 3; i++) this.click(1500 + Math.random() * 1500, 0.03, 0.35 * v, 0.02 + i * 0.05);
@@ -223,6 +291,14 @@ export class SoundEngine {
       case 'playerHurt':
         this.tone(220, 0.12, 0.35 * v, 'square', 0.6);
         return this.noiseBurst({ filter: 'lowpass', freq: 1200, endFreq: 300, vol: 0.4 * v, dur: 0.15 });
+      case 'step':
+        // passo: baque grave da bota + raspado curto no chão
+        this.tone(70 + Math.random() * 25, 0.07, 0.5 * v, 'sine', 0.5);
+        return this.noiseBurst({ filter: 'bandpass', freq: 500 + Math.random() * 400, vol: 0.45 * v, dur: 0.07, q: 1.4 });
+      case 'stepRun':
+        this.tone(65 + Math.random() * 25, 0.09, 0.7 * v, 'sine', 0.45);
+        this.noiseBurst({ filter: 'bandpass', freq: 650 + Math.random() * 500, vol: 0.6 * v, dur: 0.09, q: 1.2 });
+        return this.click(2600 + Math.random() * 1500, 0.02, 0.12 * v, 0.03); // equipamento chacoalhando
       case 'fire':
         return this.noiseBurst({ filter: 'lowpass', freq: 1200, endFreq: 300, vol: 0.8 * v, dur: 1 });
     }
@@ -242,7 +318,7 @@ export class SoundEngine {
     f.frequency.setValueAtTime(o.freq, t);
     if (o.endFreq) f.frequency.exponentialRampToValueAtTime(o.endFreq, t + o.dur);
     if (o.q) f.Q.value = o.q;
-    src.connect(f).connect(this.env(t, o.vol, o.dur)).connect(this.master!);
+    src.connect(f).connect(this.env(t, o.vol, o.dur)).connect(this.out ?? this.master!);
     src.start(t);
     src.stop(t + o.dur + 0.05);
   }
@@ -254,7 +330,7 @@ export class SoundEngine {
     osc.type = type;
     osc.frequency.setValueAtTime(freq, t);
     osc.frequency.exponentialRampToValueAtTime(freq * endRatio, t + dur);
-    osc.connect(this.env(t, vol, dur)).connect(this.master!);
+    osc.connect(this.env(t, vol, dur)).connect(this.out ?? this.master!);
     osc.start(t);
     osc.stop(t + dur + 0.05);
   }

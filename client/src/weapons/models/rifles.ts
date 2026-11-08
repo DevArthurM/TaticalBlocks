@@ -50,18 +50,24 @@ function ar(id: string, o: ArOptions, preset: 'rifle' | 'sniper' = 'rifle'): Wea
 
   const sightY = 0.08;
   if (o.carryHandle) {
-    b.box('gun', [0.016, 0.04, 0.012], [0, 0.1, -0.08]);
-    b.box('gun', [0.016, 0.04, 0.012], [0, 0.1, 0.03]);
-    b.box('gun', [0.022, 0.014, 0.13], [0, 0.125, -0.025]);
-    ironSights(b, 0.13, 0.03, -0.14 - o.handguard + 0.01, 0.12);
-    b.box('dark', [0.01, 0.06, 0.01], [0, 0.09, -0.14 - o.handguard + 0.01]);
+    // alça de transporte com mira: sai inteira quando a arma recebe uma mira (topo plano)
+    b.irons(() => {
+      b.box('gun', [0.016, 0.04, 0.012], [0, 0.1, -0.08]);
+      b.box('gun', [0.016, 0.04, 0.012], [0, 0.1, 0.03]);
+      b.box('gun', [0.022, 0.014, 0.13], [0, 0.125, -0.025]);
+      ironSights(b, 0.13, 0.03, -0.14 - o.handguard + 0.01, 0.12);
+      b.box('dark', [0.01, 0.06, 0.01], [0, 0.09, -0.14 - o.handguard + 0.01]);
+    });
   } else if (o.optic === 'reddot') {
     redDot(b, sightY, -0.03);
     b.box('dark', [0.01, 0.05, 0.01], [0, 0.09, -0.14 - o.handguard + 0.01]);
   } else if (o.optic === 'scope') {
     scope(b, sightY, -0.04, 0.26);
   } else {
-    ironSights(b, sightY, 0.06, -0.14 - o.handguard + 0.01, sightY + 0.02);
+    // massa na mesma altura da alça (antes ficava 2 cm acima da linha de visada)
+    const frontZ = -0.14 - o.handguard + 0.01;
+    ironSights(b, sightY, 0.06, frontZ, sightY - 0.002);
+    b.irons(() => b.box('dark', [0.01, 0.04, 0.01], [0, 0.06, frontZ])); // base da massa no bloco de gases
   }
 
   if (o.verticalGrip) {
@@ -81,7 +87,7 @@ export const buildM4A1 = () =>
 export const buildM16A4 = () =>
   ar('m16a4', { barrel: 0.24, handguard: 0.24, railed: false, carryHandle: false, stock: 'fixed', optic: 'iron' });
 export const buildHK416 = () =>
-  ar('hk416', { barrel: 0.12, handguard: 0.2, railed: true, carryHandle: false, stock: 'collapsible', optic: 'reddot' });
+  ar('hk416', { barrel: 0.12, handguard: 0.2, railed: true, carryHandle: false, stock: 'collapsible', optic: 'iron' });
 export const buildSR25 = () =>
   ar('sr25', { barrel: 0.3, handguard: 0.26, railed: true, carryHandle: false, stock: 'fixed', optic: 'scope', magLength: 0.11 }, 'sniper');
 
@@ -95,8 +101,10 @@ export function buildAK47(): WeaponModel {
   b.box('wood', [0.036, 0.03, 0.12], [0, 0.072, -0.28]);
   b.rod('dark', 0.016, 0.24, [0, 0.045, -0.5]);
   b.rod('steel', 0.012, 0.18, [0, 0.07, -0.43]); // tubo de gás
-  b.box('dark', [0.008, 0.03, 0.01], [0, 0.07, -0.6]);
-  b.box('sight', [0.003, 0.003, 0.002], [0, 0.088, -0.596]);
+  b.irons(() => {
+    b.box('dark', [0.008, 0.03, 0.01], [0, 0.07, -0.6]);
+    b.box('sight', [0.003, 0.003, 0.002], [0, 0.088, -0.596]);
+  });
   b.rod('black', 0.022, 0.03, [0, 0.045, -0.63]);
   ironSights(b, 0.08, -0.2, -0.6, 0.075);
   triggerGuard(b, 'steel');

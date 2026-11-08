@@ -1,6 +1,8 @@
-# FPS — Campo de Testes
+# TaticalBlocks
 
-FPS em primeira pessoa com Three.js (Vite + TypeScript) e servidor NestJS.
+<p align="center"><img src="client/public/logo.svg" alt="TaticalBlocks" width="640"></p>
+
+FPS voxel em primeira pessoa com Three.js (Vite + TypeScript) e servidor NestJS.
 
 ## Rodar
 
@@ -9,7 +11,7 @@ npm install
 npm run dev        # sobe server (:3000) e client (:5173) juntos
 ```
 
-Abra http://localhost:5173 e clique na tela. Se o servidor estiver fora do ar, o cliente usa um mapa local.
+Abra http://localhost:5173: o **menu principal** tem o nome do jogador no topo, os botões **Jogar Online**, **Jogar Zombie Solo** e **Configuração** e, à direita, três soldados 3D (o principal na frente e dois atrás) com armas sorteadas a cada carregamento da página; o fundo é sólido e o jogo nem é desenhado enquanto o menu está aberto (`client/src/ui/main/`). **Jogar Online** recolhe os botões para a esquerda, a câmera leva os soldados para a esquerda e a lista de servidores (todas as salas, partida rápida e criar sala por modo) entra pela direita; **—** recolhe a lista. Escolher uma sala abre o jogo online já entrando nela. **Esc** abre a pausa: painel lateral à esquerda com o nome do jogador, **Menu Principal**, **Configurações** e, embaixo, **Sair da partida** (volta ao menu principal; no online desconecta). O jogo fica visível à direita — clicar nele retoma. Se o servidor estiver fora do ar, o cliente usa um mapa local.
 
 | Tecla | Ação |
 |---|---|
@@ -27,6 +29,18 @@ Abra http://localhost:5173 e clique na tela. Se o servidor estiver fora do ar, o
 | Espaço (segurar no ar) | agarrar a quina à frente · **W** escala · soltar Espaço ou **S** cai |
 | B / Esc | abrir / fechar o Arsenal (menu radial) |
 
+
+### Docker
+
+```bash
+docker compose up -d --build   # imagem única: jogo + API + online
+```
+
+Abra http://localhost:3000. Um só contêiner roda o servidor NestJS, que entrega o jogo compilado em `/`, a API em `/api` e o WebSocket do online em `/server`. Para outra porta: `TB_PORT=8080 docker compose up -d`. A imagem (`Dockerfile`, multi-stage em `node:22-alpine`) compila cliente e servidor e leva só as dependências de produção, com *healthcheck* em `/api/health`.
+
+### Logo
+
+`client/public/logo.svg` e `favicon.svg` são gerados por `node scripts/gen-logo.mjs` (letras em blocos, face com gradiente, extrusão e contorno).
 ## Arsenal
 
 31 armas em 8 categorias, cada uma com tier (Comum → Lendária), modelo voxel próprio e
@@ -48,10 +62,11 @@ animação de recarga personalizada. Loadout: 1 principal, 1 secundária, 1 arma
 
 Mapa padrão (`shared/map/voxelYard.ts`, usado pelo servidor e pelo modo offline), todo em voxel e destrutível, com borda indestrutível. Arena **PvP 1v1** com simetria de ponto (girada 180° em torno do centro: as duas bases têm exatamente as mesmas rotas e coberturas):
 
-- **Bases** azul (sul, spawn) e vermelha (norte): sala em U com saída central e portas laterais, faixa e pilares na cor do time, muretas logo na saída.
+- **Borda invisível**: paredes de colisão altas na borda; não dá para sair do mapa escalando.
+- **Bases** azul (sul, spawn) e verde (norte): sala em U com saída central e portas laterais, faixa e pilares na cor do time, muretas logo na saída.
 - **Meio**: bunker de concreto com teto, janelas alinhadas à rota central e portas laterais; muretas, caixotes e pilares de aproximação.
 - **Rotas laterais**: barracão de madeira atravessável de um lado, corredor de contêineres (um oco aberto, um fechado para subir pela quina) do outro; divisórias com janela baixa ligando as rotas.
-- **Caixas com física** em posições espelhadas (`MapData.crates`). O gerador aleatório antigo continua em `GET /api/map?mode=classic`.
+- **Blocos de madeira voxel** (destrutíveis) espelhados no lugar dos antigos caixotes com física (`crates: []`). O gerador aleatório antigo continua em `GET /api/map?mode=classic`.
 
 ### Materiais
 
@@ -73,26 +88,69 @@ Código: `client/src/world/destruction/` (`VoxelBlock`, `DestructionSystem`), `c
 
 ## HUD
 
-Durante o jogo só a mira aparece. A munição é vista inspecionando a arma (**V**): a arma gira na mão e um número flutua ao lado dela com o cartucho daquela arma girando (GIFs `ammo_*.gif`, gerados em `/tools/gifs.html` → *Renderizar cartuchos*). Granadas mostram quantas restam. Mirando e andando de lado, um ponto aparece no centro da tela, mais visível quanto mais o braço inclina.
+Durante o jogo só a mira aparece. A munição é vista inspecionando a arma (**V**): a arma gira na mão e um número flutua ao lado dela com o cartucho daquela arma girando (GIFs `ammo_*.gif`, gerados em `/tools/gifs.html` → *Renderizar cartuchos*). Granadas mostram quantas restam.
 
 **Foco ao mirar:** um túnel de foco (vinheta) escurece as bordas e fecha conforme o jogador fica parado mirando (~2,5 s até o máximo; andar abre). A arma é composta com desfoque leve, exceto um pequeno círculo nítido no centro: a massa de mira fica nítida e a alça de mira/corpo da arma levemente desfocados (`client/src/core/ViewmodelFocus.ts`). Fora da mira não há custo extra.
 
-## Mapa Hospital (barricadas)
+## Acessórios (T)
 
-Abra com `?mapa=hospital` ou pelos botões **Mapa** na tela de pausa. Corredor escuro de 40 m com azulejos, piso quadriculado, macas, posto de enfermagem, fluorescentes no teto (algumas piscando) e luar entrando pelas janelas.
+Aperte **T**: o personagem segura a arma perto da câmera (de lado, cano para a esquerda, balançando de leve; pistolas só na mão direita), o fundo desfoca e de cada encaixe da arma sai uma linha até um quadrado com o acessório atual (GIF girando). Clicar no quadrado abre a fileira de opções (como os arremessáveis do arsenal): passar o mouse troca na hora no modelo, só clicar escolhe — a opção escolhida fica destacada e o quadrado muda. Embaixo aparecem o nome da arma, os atributos e a descrição da opção sob o mouse. Os GIFs dos acessórios (`att_*.gif`) são gerados em `/tools/gifs.html` → *Renderizar acessórios* (`client/src/weapons/models/attachmentPreview.ts`). **T** ou **Esc** volta. Toda arma começa sem nada; a escolha fica salva por arma no navegador.
 
-- 6 janelas e 2 saídas de emergência, cada uma com **5 tábuas**.
-- Os zumbis nascem do lado de fora, vão até a abertura menos disputada e arrancam uma tábua por golpe (~1,3 s). Sem tábuas, **pulam a janela** ou **entram pela porta**, e aí perseguem o jogador.
-- **Segure F** perto de uma abertura danificada para pregar tábuas de volta (~0,55 s cada). Com qualquer tábua no lugar, a abertura bloqueia a passagem.
-- Paredes e teto do hospital são indestrutíveis; a mobília continua destrutível.
+| Encaixe | Opções | Efeito |
+|---|---|---|
+| Mira | Holográfica (1x), COG (3,5x, corpo sextavado, só o chevron), Luneta 2x | alça/massa saem do modelo; a mira passa a ser a da óptica (sem desfoque de ferro). Na M249 a mira vai na tampa e sobe junto na recarga |
+| Boca do cano | Silenciador | tiro abafado e sem clarão, recuo −8%; online: mais baixo de longe |
+| Pente | Estendido | +50% de munição |
+| Trilho lateral | Lanterna, Laser | a luz sai do módulo preso na arma / traço vermelho curto preso à arma, passando um pouco da boca do cano, com intensidade oscilando em loop (ruído de Perlin 1D; sem ponto no cenário) e −35% de dispersão no quadril |
+| Empunhadura | Vertical, Angulada | −20% recuo vertical / −25% recuo lateral; a mão esquerda vai para a empunhadura |
 
-Código: `shared/map/hospital.ts`, `client/src/world/{Barricades,Environment}.ts`.
+Compatibilidade (`shared/weapons/attachments.ts`): miras só em armas com mira de ferro (pistolas e submetralhadoras: só holográfica); silenciador em pistolas, submetralhadoras, fuzis (menos AK-47) e snipers; pente estendido só em armas de pente (menos P90 e M249); empunhaduras em fuzis, escopetas e M249 (submetralhadoras não). Listas fechadas: revólver nada, Remington 870 só lanterna, M590 só holográfica. Lança-foguetes/granadas e minigun não aceitam nada. HK416 e P90 vêm só com alça e massa. No online os outros veem os acessórios na sua arma.
+
+## Inspeção (V)
+
+A arma gira e a mão esquerda tira o pente para conferir: a munição só aparece com o pente fora, junto com a lista de acessórios equipados. Armas sem pente destacável (revólver, escopetas de tubo, M249) mostram a munição na metade do giro. Pistolas ficam levemente inclinadas para cima.
+
+## Morte
+
+Ao morrer, a câmera vira um corpo físico (cannon-es) que cai, quica e rola pelo chão, empurrado na
+direção do tiro que matou. Quando para, a visão se acomoda deitada de lado. Arma, pernas e mira somem
+até renascer: 3 s no offline, e o tempo do servidor no online. Código: `client/src/player/DeathCam.ts`.
+
+## Saltar obstáculos
+
+Apertando **Espaço** de frente para algo de até 60% da sua altura (≈1,05 m), o jogador passa por cima num arco curto; se o obstáculo for fundo, sobe nele. Código: `client/src/player/Vault.ts`.
+
+## Deslize
+
+Correndo (Shift+W) no chão, aperte **C**: o jogador desliza para a frente (≈1,3× a velocidade de corrida, freando em ~0,9 s, dá para corrigir um pouco a direção) e termina **agachado** — Shift+W segurado não o levanta até soltar. Espaço no deslize pula com o embalo. Câmera baixa e inclina, FOV abre, poeira e som de atrito; a arma inclina (mirando, gira em torno da visada). No online, os outros veem o soldado deslizando (perna da frente esticada, a de trás dobrada, tronco para trás).
+
+## Modo online (PvP)
+
+Pelo menu principal (**Jogar Online**) — tudo na mesma rota `/`, sem parâmetro no endereço (a sala escolhida vai para o próximo carregamento via `sessionStorage`; recarregar de novo volta ao menu). Escolha o nome e o modo e entre por partida rápida, criando uma sala ou pela lista — que mostra **todas** as salas de todos os modos (com etiqueta do modo), independente do modo selecionado. Só o Pátio Voxel é jogável online.
+
+| Modo | Jogadores | Como vence |
+|---|---|---|
+| 1v1 / 5v5 / 10v10 | times Verde × Azul | primeiro time a 10 / 40 / 75 abates (ou mais abates em 10 min) |
+| **1 contra todos** | até 12, cada um por si | primeiro a 20 abates (ou o líder em 10 min) |
+| **Gun Game** | até 12, cada um por si | cada abate troca sua arma pela próxima da escada (M4 → AK → HK416 → MP7 → P90 → 870 → AA-12 → SR-25 → AWM → M249 → revólver → G17 → faca); vence quem matar com a faca. Abate de faca rebaixa a vítima um nível |
+
+No Gun Game o servidor impõe a arma (só ela e a faca causam dano) e o menu de loadout (B) fica bloqueado; o nível aparece embaixo da tela. Nos modos sem times não há aliados: todos são alvo, os uniformes alternam verde/azul só no visual e o renascimento sorteia entre todos os pontos do mapa.
+
+- **Servidor**: NestJS + WebSocket (`@nestjs/platform-ws`) em `ws://<host>:3000/server` — mesma porta da API; o Vite repassa `/server` (funciona pelo ngrok). Código em `server/src/game/` e protocolo em `shared/net/`.
+- **Fim e reinício**: ao fim da partida aparece **VITÓRIA**, **DERROTA** ou **EMPATE** com o placar; na próxima partida há uma contagem **3-2-1** (todos parados, sem dano) e o mapa é **restaurado** — voxels de volta, sem buracos, marcas nem detritos — e então "VALENDO!".
+- **Times** Verde × Azul, com uniforme camuflado da cor do time (inclusive os seus braços e pernas). Partida por abates (10 / 40 / 75) ou 10 min; renascimento em 3 s num ponto sorteado da base (evitando inimigos a menos de 12 m) com **3 s de proteção** (imortal e semitransparente para os outros, com o aviso "PROTEGIDO" na sua tela — contra spawn kill); sem fogo amigo.
+- **Personagem**: os outros jogadores aparecem como soldados voxel (capacete, colete, braçadeira do time) com animação procedural — parado, andar/correr em 8 direções, agachar, pulo, inclinação Q/E, olhar para cima/baixo, mira × quadril × arma baixa na corrida, recuo, recarga, troca de arma, golpe, arremesso, tranco ao levar tiro e ragdoll na morte. Mãos presas à arma por IK. Você continua vendo só seus braços, pés e tronco.
+- **Dano por parte do corpo** (mais sensível que o zumbi, vida 100): cabeça ×4, pescoço ×2,6, tronco ×1,35, cintura ×1,2, quadril ×1,1, ombro/coxa ×1, antebraço/joelho ×0,85–0,9, perna ×0,85, mão/pé ×0,7. O cliente detecta o acerto; o **servidor** confere (tiro registrado, cadência da arma, alcance, balins por disparo, time) e calcula o dano pelo catálogo. Explosões e fogo também são calculados no servidor.
+- Tiros, destruição do cenário (ruído determinístico) e projéteis são reproduzidos nos outros clientes. **Tab** mostra a tabela; feed de abates, marcador de acerto, nomes dos aliados sempre visíveis (inimigos nunca têm nome) e vida na tela.
+- **Som posicional**: tiros e passos dos outros jogadores vêm do lado certo (panorâmica estéreo), abafam e diminuem com a distância. Agachado quase não faz barulho; silenciador alcança bem menos.
+- **Direção do dano**: ao ser atingido (online ou por zumbi), uma meia-lua vermelha em volta da mira aponta para quem atacou e acompanha quando você vira.
+- **Bot de teste**: `npm run bot` (1v1), `npm run bot -- 5v5 4` (4 bots) ou `npm run bot -- 1v1 1 <id-da-sala>`. Os bots só andam, miram e atiram (não acertam).
+- Limitações: caixas com física não são sincronizadas; buracos podem divergir levemente em tiros simultâneos.
 
 ## Desempenho
 
 - **Zumbis instanciados** (`client/src/enemies/zombie/ZombieInstancer.ts`): as malhas de cada zumbi continuam existindo (ossos, raycast dos tiros, desmembramento, ragdoll), mas ficam invisíveis; um `InstancedMesh` por material desenha todos de uma vez. Com 32 zumbis: ~727 → ~272 draw calls.
 - **Resolução dinâmica** (Configurações → Gráficos): abaixo de ~50 FPS reduz a resolução em passos de 10% (até 60% da escolhida) e volta a subir aos poucos quando sobra folga. Se subir logo causar nova queda, aquele nível vira teto por 30 s.
-- **Luzes por proximidade** (hospital): só as 4 luminárias mais próximas têm `PointLight` de verdade (número fixo, sem recompilar shaders); as outras só brilham.
 - **Matrizes estáticas**: cenário, voxels, marcas de tiro e tábuas usam `matrixAutoUpdate = false`; as matrizes do mundo são atualizadas uma vez por quadro em `RendererSystem.render`.
 - **Shaders pré-compilados** (`compileAsync`) na abertura ("Preparando gráficos…", até 6 s), para o primeiro tiro/zumbi/explosão não travar. A luz do clarão do tiro fica sempre na cena (intensidade 0), porque mudar o número de luzes troca os shaders.
 
@@ -120,7 +178,7 @@ Código: `client/src/enemies/` (`ZombieDirector`, `zombie/Zombie`, `ZombieModel`
 
 ## Configurações
 
-Na tela de pausa (Esc) → **⚙ Configurações**. Salvas no navegador (`localStorage`).
+No menu principal (**Configuração**) ou na pausa (Esc) → **Configurações**. Salvas no navegador (`localStorage`).
 
 - **Gráficos**: predefinição (Baixo / Médio / Alto / Ultra), resolução (50–100%) e sombras (desligadas / baixa / média / alta).
 - **Câmera**: campo de visão (60–110 no controle; acima de 75 é comprimido e o 110 equivale a 93,5° reais). O zoom das miras de ferro/red-dot acompanha; lunetas mantêm o zoom fixo.

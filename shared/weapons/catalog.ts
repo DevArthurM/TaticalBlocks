@@ -79,8 +79,8 @@ export const WEAPONS: readonly WeaponDef[] = [
   }),
   gun({
     id: 'revolver', name: 'Revólver .357', armSpring: spring(2.8, 65, 0.72), category: 'pistol', slot: 'secondary', tier: 4,
-    description: 'Seis tiros devastadores. Recarga com speedloader.',
-    fireMode: 'semi', rpm: 160, damage: 70, magazineSize: 6, reload: mag(2.4), range: 170,
+    description: 'Seis tiros devastadores. Ejeta as cápsulas e recarrega bala a bala.',
+    fireMode: 'semi', rpm: 160, damage: 70, magazineSize: 6, reload: shells(0.8, 0.5, 0.55), range: 170,
     hipSpread: 0.016, adsSpread: 0.0015, recoil: { pitch: 0.065, yaw: 0.012 }, adsFov: 58,
     sight: 'iron', shell: 'none', sound: 'heavyPistol', moveSpeed: 1,
   }),
@@ -126,7 +126,7 @@ export const WEAPONS: readonly WeaponDef[] = [
     description: 'Bullpup com carregador superior de 50 tiros e mira reflex.',
     fireMode: 'auto', rpm: 900, damage: 20, magazineSize: 50, reload: mag(2.7), range: 130,
     hipSpread: 0.018, adsSpread: 0.0035, recoil: { pitch: 0.008, yaw: 0.006 }, adsFov: 56,
-    sight: 'reddot', shell: 'pistol', sound: 'smg', moveSpeed: 0.97,
+    sight: 'iron', shell: 'pistol', sound: 'smg', moveSpeed: 0.97,
   }),
 
   // ───────── Fuzis ─────────
@@ -156,7 +156,7 @@ export const WEAPONS: readonly WeaponDef[] = [
     description: 'Pistão a gás, trilhos e mira red-dot. Recuo muito estável.',
     fireMode: 'auto', rpm: 850, damage: 28, magazineSize: 30, reload: mag(2.1), range: 260,
     hipSpread: 0.02, adsSpread: 0.0018, recoil: { pitch: 0.012, yaw: 0.005 }, adsFov: 52,
-    sight: 'reddot', shell: 'rifle', sound: 'rifle', moveSpeed: 0.93,
+    sight: 'iron', shell: 'rifle', sound: 'rifle', moveSpeed: 0.93,
   }),
 
   // ───────── Escopetas ─────────
@@ -186,7 +186,7 @@ export const WEAPONS: readonly WeaponDef[] = [
   gun({
     id: 'hunting', name: 'Rifle de Caça', category: 'sniper', slot: 'primary', tier: 1,
     description: 'Ferrolho manual e coronha de madeira. Munição inserida uma a uma.',
-    fireMode: 'bolt', rpm: 50, damage: 80, magazineSize: 5, reload: shells(0.55, 0.5, 0.55), range: 400,
+    fireMode: 'bolt', rpm: 50, damage: 80, magazineSize: 5, reload: shells(0.85, 0.6, 0.55), range: 400,
     hipSpread: 0.04, adsSpread: 0.0004, recoil: { pitch: 0.05, yaw: 0.008 }, adsFov: 45,
     sight: 'iron', shell: 'rifle', sound: 'sniper', moveSpeed: 0.92,
   }),
@@ -225,14 +225,14 @@ export const WEAPONS: readonly WeaponDef[] = [
     description: 'Lança-foguetes de ombro. Dano em área enorme.',
     fireMode: 'semi', rpm: 30, damage: 150, magazineSize: 1, reload: mag(2.9), range: 300,
     hipSpread: 0.02, adsSpread: 0.004, recoil: { pitch: 0.09, yaw: 0.01 }, adsFov: 55,
-    sight: 'iron', shell: 'none', sound: 'rocket', moveSpeed: 0.8, projectile: 'rocket',
+    sight: 'none', shell: 'none', sound: 'rocket', moveSpeed: 0.8, projectile: 'rocket',
   }),
   gun({
     id: 'm32', name: 'M32 MGL', category: 'heavy', slot: 'primary', tier: 4,
     description: 'Lança-granadas de tambor com 6 cargas de 40 mm.',
     fireMode: 'semi', rpm: 120, damage: 100, magazineSize: 6, reload: shells(0.7, 0.45, 0.6), range: 200,
     hipSpread: 0.02, adsSpread: 0.006, recoil: { pitch: 0.05, yaw: 0.01 }, adsFov: 58,
-    sight: 'iron', shell: 'none', sound: 'launcher', moveSpeed: 0.85, projectile: 'grenade40',
+    sight: 'none', shell: 'none', sound: 'launcher', moveSpeed: 0.85, projectile: 'grenade40',
   }),
 
   // ───────── Brancas ─────────

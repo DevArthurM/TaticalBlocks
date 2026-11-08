@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CAMERA, VIEWMODEL, WORLD_COLORS } from '../config/constants';
 import { ViewmodelFocus } from './ViewmodelFocus';
+import { WorldBlur } from './WorldBlur';
 
 /** Limites e passos da resolução dinâmica. */
 const DYN_MIN = 0.6;
@@ -22,6 +23,9 @@ export class RendererSystem {
   /** Chamado depois de atualizar as matrizes de mundo e antes de desenhar (ex.: instâncias). */
   beforeRender: () => void = () => {};
   private readonly vmFocus: ViewmodelFocus;
+  /** 0..1 — fundo desfocado (personalização da arma). */
+  worldBlur = 0;
+  private readonly worldBlurPass: WorldBlur;
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -46,6 +50,7 @@ export class RendererSystem {
 
     this.viewmodelCamera = new THREE.PerspectiveCamera(VIEWMODEL.fov, aspect, 0.01, 10);
     this.vmFocus = new ViewmodelFocus(this.renderer);
+    this.worldBlurPass = new WorldBlur(this.renderer);
 
     this.resize();
     window.addEventListener('resize', this.resize);
@@ -200,7 +205,8 @@ export class RendererSystem {
     this.scene.updateMatrixWorld();
     this.beforeRender();
     this.renderer.clear();
-    this.renderer.render(this.scene, this.camera);
+    if (this.worldBlur > 0.01) this.worldBlurPass.render(this.scene, this.camera, this.worldBlur);
+    else this.renderer.render(this.scene, this.camera);
     this.renderer.clearDepth();
     if (this.focus > 0.01) this.vmFocus.render(this.viewmodelScene, this.viewmodelCamera, this.focus);
     else this.renderer.render(this.viewmodelScene, this.viewmodelCamera);
@@ -212,6 +218,7 @@ export class RendererSystem {
     this.renderer.setSize(w, h);
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.vmFocus?.setSize(size.x, size.y);
+    this.worldBlurPass?.setSize(size.x, size.y);
     for (const cam of [this.camera, this.viewmodelCamera]) {
       cam.aspect = w / h;
       cam.updateProjectionMatrix();

@@ -19,27 +19,38 @@ function scatter(ctx: CanvasRenderingContext2D, rnd: Rng, size: number, colors: 
 }
 
 /** Camuflado digital verde/marrom das mangas. */
-export function createCamoTexture(seed = 11): THREE.Texture {
+/** Paletas de camuflado: oliva (offline) e os uniformes dos times online. */
+export type CamoPalette = 'woodland' | 'green' | 'blue';
+
+const CAMO: Record<CamoPalette, { base: string; mid: string[]; light: string[]; dark: string[]; cuff: string[] }> = {
+  woodland: { base: '#4e5733', mid: ['#6e7843', '#5a6439'], light: ['#8a7a57', '#7c6c4b'], dark: ['#33372a', '#2a2824'], cuff: ['#69724a', '#5d6641', '#757f53', '#6e6f4c', '#545c3a'] },
+  green: { base: '#3d5a2a', mid: ['#557c35', '#4a6b2f'], light: ['#7f9450', '#6e8346'], dark: ['#22331a', '#1a2614'], cuff: ['#5b7a3c', '#506d35', '#678845', '#5f7a40', '#45602f'] },
+  blue: { base: '#34496a', mid: ['#4a6690', '#405a7f'], light: ['#8a9ab2', '#7888a2'], dark: ['#1d283c', '#161f30'], cuff: ['#55698c', '#4b5e80', '#61779c', '#5a6c8c', '#43567a'] },
+};
+
+export function createCamoTexture(seed = 11, palette: CamoPalette = 'woodland'): THREE.Texture {
   const S = 16;
   const { canvas, ctx } = createCanvas(S);
   const rnd = seededRandom(seed);
-  ctx.fillStyle = '#4e5733';
+  const c = CAMO[palette];
+  ctx.fillStyle = c.base;
   ctx.fillRect(0, 0, S, S);
-  scatter(ctx, rnd, S, ['#6e7843', '#5a6439'], 14, 4, 3);
-  scatter(ctx, rnd, S, ['#8a7a57', '#7c6c4b'], 8, 3, 2);
-  scatter(ctx, rnd, S, ['#33372a', '#2a2824'], 10, 3, 2);
+  scatter(ctx, rnd, S, c.mid, 14, 4, 3);
+  scatter(ctx, rnd, S, c.light, 8, 3, 2);
+  scatter(ctx, rnd, S, c.dark, 10, 3, 2);
   return pixelTexture(canvas);
 }
 
 /** Barra dobrada da manga (tom oliva mais claro e uniforme). */
-export function createCuffTexture(seed = 5): THREE.Texture {
+export function createCuffTexture(seed = 5, palette: CamoPalette = 'woodland'): THREE.Texture {
   const S = 16;
   const { canvas, ctx } = createCanvas(S);
   const rnd = seededRandom(seed);
-  ctx.fillStyle = '#69724a';
+  const c = CAMO[palette].cuff;
+  ctx.fillStyle = c[0];
   ctx.fillRect(0, 0, S, S);
-  scatter(ctx, rnd, S, ['#5d6641', '#757f53', '#6e6f4c'], 14, 4, 3);
-  ctx.fillStyle = '#545c3a';
+  scatter(ctx, rnd, S, c.slice(1, 4), 14, 4, 3);
+  ctx.fillStyle = c[4];
   ctx.fillRect(0, S - 2, S, 2);
   return pixelTexture(canvas);
 }
@@ -295,5 +306,58 @@ export function createFootwearTexture(): THREE.Texture {
   ctx.fillRect(1, 1, 3, 1);
   ctx.fillStyle = '#7a7a7a';
   ctx.fillRect(0, S - 2, S, 2);
+  return pixelTexture(canvas);
+}
+
+// ─────────────── soldado (modo online) ───────────────
+
+/** Rosto humano voxel em um tom de pele. */
+export function createSoldierFaceTexture(tone: number): THREE.Texture {
+  const S = 16;
+  const { canvas, ctx } = createCanvas(S);
+  const rnd = seededRandom(71);
+  ctx.fillStyle = shade(tone, 0);
+  ctx.fillRect(0, 0, S, S);
+  scatter(ctx, rnd, S, [shade(tone, -0.06), shade(tone, 0.06)], 10, 3, 2);
+  // sobrancelhas, olhos, nariz e boca
+  ctx.fillStyle = shade(tone, -0.6);
+  ctx.fillRect(3, 5, 3, 1);
+  ctx.fillRect(10, 5, 3, 1);
+  ctx.fillStyle = '#f2efe6';
+  ctx.fillRect(3, 6, 3, 2);
+  ctx.fillRect(10, 6, 3, 2);
+  ctx.fillStyle = '#2b2a28';
+  ctx.fillRect(4, 6, 1, 2);
+  ctx.fillRect(11, 6, 1, 2);
+  ctx.fillStyle = shade(tone, -0.18);
+  ctx.fillRect(7, 8, 2, 2);
+  ctx.fillStyle = shade(tone, -0.45);
+  ctx.fillRect(6, 11, 4, 1);
+  return pixelTexture(canvas);
+}
+
+/** Pele humana lisa em um tom. */
+export function createHumanSkinTexture(tone: number): THREE.Texture {
+  const S = 8;
+  const { canvas, ctx } = createCanvas(S);
+  const rnd = seededRandom(73);
+  ctx.fillStyle = shade(tone, 0);
+  ctx.fillRect(0, 0, S, S);
+  scatter(ctx, rnd, S, [shade(tone, -0.05), shade(tone, 0.05)], 8, 2, 2);
+  return pixelTexture(canvas);
+}
+
+/** Equipamento tático (colete, bolsos): trama de nylon. */
+export function createGearTexture(color: number): THREE.Texture {
+  const S = 16;
+  const { canvas, ctx } = createCanvas(S);
+  const rnd = seededRandom(79);
+  ctx.fillStyle = shade(color, 0);
+  ctx.fillRect(0, 0, S, S);
+  for (let y = 1; y < S; y += 4) {
+    ctx.fillStyle = shade(color, -0.25);
+    ctx.fillRect(0, y, S, 1);
+  }
+  scatter(ctx, rnd, S, [shade(color, 0.1), shade(color, -0.1)], 10, 3, 1);
   return pixelTexture(canvas);
 }

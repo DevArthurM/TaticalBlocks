@@ -96,6 +96,11 @@ export class Debris {
     }
   }
 
+  /** Remove todos os detritos (mapa restaurado). */
+  clear(): void {
+    while (this.pieces.length) this.remove(this.pieces.length - 1);
+  }
+
   private remove(i: number): void {
     this.physics.world.removeBody(this.pieces[i].body);
     this.pieces.splice(i, 1);

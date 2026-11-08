@@ -92,6 +92,17 @@ export class DestructionSystem {
     }
   }
 
+  /** Restaura o mapa inteiro (nova partida online): todos os voxels de volta, sem marcas. */
+  reset(): void {
+    for (const block of this.blocks) {
+      block.reset();
+      this.physics.setStatic(block.id, block.colliders);
+    }
+    this.rebuildColliderList();
+    this.decals.clearAll();
+    this.debris.clear();
+  }
+
   /** Aplica as mudanças pendentes uma vez por quadro (em cascata: tetos, pilhas). */
   update(): void {
     let changed = false;
@@ -244,7 +255,7 @@ export class DestructionSystem {
   private rebuildColliderList(): void {
     const list = this.world.colliders;
     list.length = 0;
-    list.push(...this.fixedColliders);
+    list.push(...this.fixedColliders, ...this.world.boundary);
     for (const b of this.blocks) list.push(...b.colliders);
     list.push(...this.extraColliders);
   }

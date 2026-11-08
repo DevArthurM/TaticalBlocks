@@ -5,23 +5,61 @@ import type { WeaponModel } from './types';
 
 export function buildM249(): WeaponModel {
   const b = new ModelBuilder('m249');
+  /** Linha de visada (altura do olho na âncora `sight`). */
+  const L = 0.112;
   b.box('black', [0.06, 0.08, 0.3], [0, 0.035, -0.06]);
   b.box('dark', [0.004, 0.03, 0.08], [0.031, 0.04, -0.05]);
-  // tampa superior articulada na traseira
-  const cover = b.part('cover', [0, 0.078, 0.07]);
+  // tampa superior articulada na traseira (a alça e a mira acoplada sobem junto na recarga)
+  const coverAt: [number, number, number] = [0, 0.078, 0.07];
+  const cover = b.part('cover', coverAt);
+  const c = (x: number, y: number, z: number): [number, number, number] => [x - coverAt[0], y - coverAt[1], z - coverAt[2]];
   b.box('gun', [0.058, 0.02, 0.22], [0, 0.008, -0.11], cover);
   b.box('dark', [0.06, 0.006, 0.02], [0, 0.0, -0.2], cover);
   b.anchor('cover', [-0.02, 0.016, -0.18], cover);
-  // guarda-mão, cano e alça
+  // alça em anel (abertura) sobre a tampa, com orelhas de proteção
+  const rearZ = 0.04;
+  b.irons(() => {
+    b.box('black', [0.026, 0.01, 0.024], c(0, 0.101, rearZ), cover); // base
+    b.box('dark', [0.016, 0.004, 0.005], c(0, L + 0.006, rearZ), cover);
+    b.box('dark', [0.016, 0.004, 0.005], c(0, L - 0.006, rearZ), cover);
+    b.box('dark', [0.004, 0.016, 0.005], c(-0.006, L, rearZ), cover);
+    b.box('dark', [0.004, 0.016, 0.005], c(0.006, L, rearZ), cover);
+    b.box('black', [0.004, 0.022, 0.016], c(-0.012, L - 0.002, rearZ), cover);
+    b.box('black', [0.004, 0.022, 0.016], c(0.012, L - 0.002, rearZ), cover);
+  });
+  b.anchor('sight', [0, L, rearZ]);
+
+  // guarda-mão, cano longo e alça de transporte
   b.box('black', [0.054, 0.05, 0.18], [0, 0.02, -0.3]);
   for (let i = 0; i < 5; i++) b.box('dark', [0.056, 0.008, 0.01], [0, 0.03, -0.38 + i * 0.035]);
-  b.rod('steel', 0.024, 0.4, [0, 0.045, -0.58]);
-  b.rod('black', 0.03, 0.05, [0, 0.045, -0.79]);
-  b.box('black', [0.016, 0.04, 0.012], [0, 0.085, -0.42]);
-  b.box('black', [0.02, 0.012, 0.09], [0, 0.11, -0.42]);
-  // bipé recolhido
-  b.box('black', [0.01, 0.01, 0.2], [-0.014, 0.01, -0.62]);
-  b.box('black', [0.01, 0.01, 0.2], [0.014, 0.01, -0.62]);
+  b.rod('steel', 0.024, 0.54, [0, 0.045, -0.65]);
+  for (let i = 0; i < 3; i++) b.rod('dark', 0.028, 0.012, [0, 0.045, -0.44 - i * 0.03]); // aletas de refrigeração
+  b.rod('black', 0.03, 0.05, [0, 0.045, -0.945]);
+  // alça de transporte: sai com mira acoplada (não aparece no fundo da luneta)
+  b.irons(() => {
+    b.box('black', [0.016, 0.04, 0.012], [0, 0.085, -0.42]);
+    b.box('black', [0.02, 0.012, 0.09], [0, 0.11, -0.42]);
+  });
+
+  // massa: poste com capuz aberto num bloco preso ao cano
+  const frontZ = -0.88;
+  b.box('black', [0.03, 0.03, 0.024], [0, 0.05, frontZ]); // abraçadeira no cano
+  b.irons(() => {
+    b.box('black', [0.006, L - 0.064, 0.008], [0, (0.064 + L) / 2 - 0.001, frontZ]); // poste
+    b.box('sight', [0.003, 0.003, 0.002], [0, L - 0.0015, frontZ + 0.005]);
+    b.box('black', [0.004, 0.04, 0.018], [-0.012, 0.09, frontZ]); // capuz
+    b.box('black', [0.004, 0.04, 0.018], [0.012, 0.09, frontZ]);
+  });
+
+  // bipé recolhido sob o cano, preso por uma abraçadeira (bloco que liga as pernas ao cano)
+  const bipodZ = -0.8;
+  b.box('black', [0.036, 0.04, 0.028], [0, 0.03, bipodZ]); // abraçadeira
+  b.box('dark', [0.044, 0.012, 0.02], [0, 0.012, bipodZ + 0.004]); // eixo das pernas
+  b.box('black', [0.01, 0.01, 0.2], [-0.016, 0.01, bipodZ + 0.1]);
+  b.box('black', [0.01, 0.01, 0.2], [0.016, 0.01, bipodZ + 0.1]);
+  b.box('dark', [0.014, 0.014, 0.016], [-0.016, 0.01, bipodZ + 0.2]); // sapatas
+  b.box('dark', [0.014, 0.014, 0.016], [0.016, 0.01, bipodZ + 0.2]);
+
   triggerGuard(b);
   pistolGrip(b, 0.06);
   // caixa de munição + cinta
@@ -37,9 +75,8 @@ export function buildM249(): WeaponModel {
   const ch = b.part('charging', [0.034, 0.03, -0.18]);
   b.box('dark', [0.014, 0.014, 0.02], [0.006, 0, 0], ch);
   b.anchor('charging', [0.016, 0, 0], ch);
-  ironSights(b, 0.1, 0.04, -0.75, 0.065);
   b.anchor('support', [-0.022, -0.005, -0.3]);
-  b.anchor('muzzle', [0, 0.045, -0.82]);
+  b.anchor('muzzle', [0, 0.045, -0.975]);
   b.anchor('eject', [0.02, -0.02, -0.06]);
   b.anchor('grip', [0.006, -0.042, 0.085]);
   return b.build(view('lmg'));

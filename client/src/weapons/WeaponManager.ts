@@ -1,3 +1,5 @@
+import { applyAttachmentStats, ATTACHMENTS, sanitizeAttachments, type AttachmentId, SLOT_ORDER as ATTACHMENT_SLOTS, type WeaponAttachments } from '@shared/weapons/attachments';
+import { findWeapon } from '@shared/weapons/catalog';
 import type { Loadout } from '@shared/weapons/loadout';
 import type { FirearmDef, MeleeDef, ThrowableDef, WeaponCategory } from '@shared/weapons/types';
 import * as THREE from 'three';
@@ -8,7 +10,7 @@ import { approach, damp, lerp } from '../core/math';
 import type { Decals } from '../effects/Decals';
 import type { ParticleSystem } from '../effects/ParticleSystem';
 import type { PlayerController } from '../player/PlayerController';
-import { boltCycle, DRAW_CLIP, inspectClip, MELEE_CLIPS, pumpCycle, throwClip } from './animation/actions';
+import { boltCycle, DRAW_CLIP, INSPECT_REVEAL, inspectClip, MELEE_CLIPS, pumpCycle, throwClip } from './animation/actions';
 import { ammoGifId, WEAPON_AMMO } from './models/ammo';
 import type { Clip, Cue } from './animation/Clip';
 import { RELOADS } from './animation/reloads';
@@ -18,6 +20,7 @@ import { ArmRecoil } from './logic/ArmRecoil';
 import type { Firearm } from './logic/Firearm';
 import { type EquipSlot, type HeldItem, Inventory, SLOT_ORDER } from './logic/Inventory';
 import { Viewmodel } from './view/Viewmodel';
+import { AttachmentStore } from './AttachmentStore';
 
 export interface WeaponManagerDeps {
   loadout: Loadout;
@@ -37,7 +40,17 @@ export interface WeaponManagerDeps {
    */
   onHit?: (hit: THREE.Intersection, dir: THREE.Vector3, damage: number) => boolean;
   /** Inimigos: testa o raio até `far` (antes do cenário). Retorna o acerto, se houver. */
-  enemies?: { shoot(origin: THREE.Vector3, dir: THREE.Vector3, far: number, damage: number): { distance: number } | null };
+  enemies?: {
+    shoot(origin: THREE.Vector3, dir: THREE.Vector3, far: number, damage: number, meta?: ShotMeta): { distance: number } | null;
+  };
+  /** Disparo (um por gatilho, antes dos raios) — usado pelo modo online. */
+  onShot?: (weapon: string, origin: THREE.Vector3, dir: THREE.Vector3, pellets: number) => void;
+}
+
+/** Arma e tipo do golpe (para o modo online validar o dano). */
+export interface ShotMeta {
+  weapon: string;
+  melee?: boolean;
 }
 
 const DRAW_TIME: Record<WeaponCategory, number> = {
@@ -52,6 +65,13 @@ const DRAW_TIME: Record<WeaponCategory, number> = {
 };
 
 const THROW_TIME = 0.95;
+
+/** Para que lado o pente sai na inspeção (null: sem pente destacável — tambor, tubo, cinta). */
+function inspectMagDir(item: HeldItem): 'down' | 'up' | null {
+  if (item.kind !== 'firearm' || item.def.reload.kind !== 'magazine' || item.def.projectile) return null;
+  if (item.def.id === 'm249' || item.def.id === 'minigun') return null;
+  return item.def.id === 'p90' ? 'up' : 'down';
+}
 const INSPECT_TIME = 2.6;
 /** Intensidade do giro da inspeção por categoria (armas longas giram menos). */
 const INSPECT_SCALE: Record<WeaponCategory, number> = {
@@ -81,6 +101,8 @@ export class WeaponManager {
   baseFov: number = CAMERA.fov;
   /** Tempo restante da inspeção (V). */
   inspectTime = 0;
+  /** Inspeção atual tira o pente? (e para que lado) */
+  private inspectMag: 'down' | 'up' | null = null;
   /** Mirar segurando o botão direito ou alternando com um clique. */
   aimMode: 'segurar' | 'alternar' = 'segurar';
   private aimToggled = false;
@@ -108,8 +130,114 @@ export class WeaponManager {
     this.viewmodel = new Viewmodel(d.viewmodelScene);
     this.viewmodel.onCue = (cue) => this.handleCue(cue);
     d.worldScene.add(this.flashLight);
+    // a lanterna fica sempre na cena (só acende com o acessório; evita recompilar shaders)
+    d.worldScene.add(this.torch, this.torch.target);
+    this.applyStoredAttachments();
     this.equip(this.inventory.firstAvailable());
   }
+
+  // ─────────────────────────── acessórios ───────────────────────────
+
+  readonly attachmentStore = new AttachmentStore();
+  /** Modo de personalização (T): arma na frente da câmera, sem atirar/mirar. */
+  customizing = false;
+  /** 0..1 suavizado (pose e desfoque do fundo). */
+  customizeT = 0;
+  /** T apertado jogando (o jogo abre o menu). */
+  onCustomizeRequest: () => void = () => {};
+  private readonly torch = new THREE.SpotLight(0xfff1d6, 0, 32, 0.36, 0.55, 1.4);
+  private readonly devDir = new THREE.Vector3();
+  private readonly devTmp = new THREE.Vector3();
+  private readonly devAim = new THREE.Vector3();
+
+  /** Arma na mão tem mira acoplada (sem desfoque de alça/massa). */
+  get hasOptic(): boolean {
+    return !!this.currentAttachments.optic;
+  }
+
+  /** Acessórios da arma na mão (para o modo online). */
+  get currentAttachments(): WeaponAttachments {
+    const item = this.held;
+    return item?.kind === 'firearm' ? this.attachmentStore.get(item.def.id) : {};
+  }
+
+  /** Aplica os acessórios salvos às armas do inventário (atributos e modelos). */
+  private applyStoredAttachments(): void {
+    for (const slot of ['primary', 'secondary'] as const) {
+      const item = this.inventory.get(slot);
+      if (item?.kind !== 'firearm') continue;
+      const att = this.attachmentStore.get(item.def.id);
+      this.applyStats(item, att);
+      this.viewmodel.setAttachments(item.def.id, att);
+    }
+  }
+
+  private applyStats(item: Extract<HeldItem, { kind: 'firearm' }>, att: WeaponAttachments): void {
+    const base = findWeapon(item.def.id);
+    if (base?.kind !== 'firearm') return;
+    const def = applyAttachmentStats(base, att);
+    item.def = def;
+    item.gun.def = def;
+    if (item.gun.ammo > def.magazineSize) item.gun.ammo = def.magazineSize;
+  }
+
+  /** Troca os acessórios de uma arma (menu T): salva, recalcula e refaz o modelo. */
+  setAttachments(id: string, att: WeaponAttachments): WeaponAttachments {
+    const clean = this.attachmentStore.set(id, att);
+    this.previewKey = JSON.stringify(clean);
+    for (const slot of ['primary', 'secondary'] as const) {
+      const item = this.inventory.get(slot);
+      if (item?.kind === 'firearm' && item.def.id === id) this.applyStats(item, clean);
+    }
+    this.viewmodel.setAttachments(id, clean);
+    return clean;
+  }
+
+  setCustomizing(on: boolean): void {
+    this.customizing = on;
+    if (on) this.gun?.cancelReload();
+    this.viewmodel.lockShowcase(on);
+    // saindo do editor: desfaz qualquer pré-visualização
+    if (!on) this.previewAttachments(null);
+  }
+
+  /**
+   * Pré-visualiza acessórios na arma da mão (menu T, mouse sobre a opção) sem salvar
+   * nem mudar atributos. `null` volta aos escolhidos.
+   */
+  previewAttachments(att: WeaponAttachments | null): void {
+    const id = this.held?.def.id;
+    if (!id) return;
+    const def = findWeapon(id);
+    const next = att ? sanitizeAttachments(def, att) : this.attachmentStore.get(id);
+    const key = JSON.stringify(next);
+    if (key === this.previewKey) return;
+    this.previewKey = key;
+    this.viewmodel.setAttachments(id, next);
+  }
+  private previewKey = '';
+
+  /** Lanterna (luz de foco) presa ao módulo da arma. */
+  private updateDevices(): void {
+    const att = this.currentAttachments;
+    const active = !this.customizing && this.customizeT < 0.05;
+    const cam = this.d.camera;
+    // direção do cano (câmera + desvio do braço)
+    const { pitch, yaw } = this.aimOffset;
+    this.devDir.set(-Math.tan(yaw), Math.tan(pitch), -1).normalize().applyQuaternion(cam.quaternion);
+    // lanterna: a luz sai do módulo preso na arma e segue o cano
+    const torchOn = active && att.rail === 'flashlight' && this.viewmodel.anchorFrame('light', this.devTmp, this.devAim);
+    this.torch.intensity = torchOn ? 60 : 0;
+    if (torchOn) {
+      this.torch.position.copy(this.devTmp).applyQuaternion(cam.quaternion).add(cam.position);
+      this.devAim.applyQuaternion(cam.quaternion);
+      this.torch.target.position.copy(this.torch.position).addScaledVector(this.devAim, 12);
+      this.torch.target.updateMatrixWorld();
+    }
+  }
+
+  /** R apertado durante o ciclo do ferrolho/bomba: recarrega quando terminar. */
+  private reloadQueued = false;
 
   get held(): HeldItem | undefined {
     return this.activeSlot ? this.inventory.get(this.activeSlot) : undefined;
@@ -141,6 +269,7 @@ export class WeaponManager {
   setLoadout(loadout: Loadout): void {
     const before = this.held?.def.id;
     this.inventory.apply(loadout);
+    this.applyStoredAttachments();
     for (const id of [loadout.primary, loadout.secondary, loadout.melee, loadout.grenade.type]) if (id) this.viewmodel.preload(id);
     const now = this.held?.def.id;
     if (!now) this.equip(this.inventory.firstAvailable(), true);
@@ -152,6 +281,7 @@ export class WeaponManager {
     this.gun?.cancelReload();
     if (this.activeSlot && this.activeSlot !== slot) this.lastSlot = this.activeSlot;
     this.activeSlot = slot;
+    this.reloadQueued = false;
     this.throwPending = false;
     this.busyLock = 0;
     const item = slot ? this.inventory.get(slot) : undefined;
@@ -166,6 +296,16 @@ export class WeaponManager {
   }
 
   update(dt: number, time: number, input: Input): void {
+    this.customizeT = approach(this.customizeT, this.customizing ? 1 : 0, dt / 0.35);
+    if (input.wasPressed(KEYS.customize) && !this.customizing) this.onCustomizeRequest();
+    this.updateDevices();
+    if (this.customizing || this.customizeT > 0.02) {
+      // personalizando: sem troca de arma, tiro ou mira
+      this.adsT = approach(this.adsT, 0, dt / 0.14);
+      this.drawLock = Math.max(0, this.drawLock - dt);
+      this.updateViewmodel(dt, time);
+      return;
+    }
     this.handleSwitching(input);
     this.drawLock = Math.max(0, this.drawLock - dt);
     this.busyLock = Math.max(0, this.busyLock - dt);
@@ -189,6 +329,13 @@ export class WeaponManager {
     this.updateFlashLight(dt);
     this.updateArmRecoil(dt, item);
 
+    this.updateViewmodel(dt, time, input);
+  }
+
+  /** Monta o quadro do viewmodel (pose, recarga, balanço, personalização). */
+  private updateViewmodel(dt: number, time: number, input?: Input): void {
+    const ledgeBusy = this.d.player.ledgePhase !== null;
+    const item = this.held;
     const gun = this.gun;
     const r = gun?.reloadState;
     const anim = item ? RELOADS[item.def.id] : undefined;
@@ -201,13 +348,16 @@ export class WeaponManager {
     this.viewmodel.update({
       dt,
       time,
+      slide: this.d.player.slideAmount,
       moveSpeed: this.d.player.horizontalSpeed,
       strafe: this.d.player.strafeRelative,
+      forward: this.d.player.forwardSpeed,
       sprinting: this.d.player.sprinting,
       onGround: this.d.player.onGround,
       adsT: this.adsT,
-      lookDX: input.mouseDX,
-      lookDY: input.mouseDY,
+      lookDX: input?.mouseDX ?? 0,
+      lookDY: input?.mouseDY ?? 0,
+      customize: this.customizeT,
       landingImpact: this.d.player.landingImpact,
       reload,
       ledge: ledgeBusy && this.d.player.ledgeHands(this.ledgeL, this.ledgeR) ? this.toCamera() : null,
@@ -232,16 +382,21 @@ export class WeaponManager {
    * O que mostrar durante a inspeção: GIF do cartucho (ou da granada) e a contagem.
    * `null` fora da inspeção ou com arma branca.
    */
-  get inspection(): { gifId: string; count: number; reserve: number; t: number } | null {
+  get inspection(): { gifId: string; count: number; reserve: number; t: number; attachments: string[] } | null {
     if (this.inspectTime <= 0) return null;
     const item = this.held;
-    const t = 1 - this.inspectTime / INSPECT_TIME;
+    // a munição só aparece com o pente fora (ou na metade do giro, sem pente destacável)
+    const [r0, r1] = this.inspectMag ? INSPECT_REVEAL.mag : INSPECT_REVEAL.noMag;
+    const t = (1 - this.inspectTime / INSPECT_TIME - r0) / (r1 - r0);
+    if (t <= 0 || t >= 1) return null;
     if (item?.kind === 'firearm') {
       const ammo = WEAPON_AMMO[item.def.id];
       if (!ammo) return null;
-      return { gifId: ammoGifId(ammo), count: item.gun.ammo, reserve: item.gun.reserve, t };
+      const att = this.currentAttachments;
+      const attachments = ATTACHMENT_SLOTS.map((slot) => att[slot]).filter((id): id is AttachmentId => !!id).map((id) => ATTACHMENTS[id].name);
+      return { gifId: ammoGifId(ammo), count: item.gun.ammo, reserve: item.gun.reserve, t, attachments };
     }
-    if (item?.kind === 'throwable') return { gifId: item.def.id, count: this.inventory.grenades, reserve: Number.NaN, t };
+    if (item?.kind === 'throwable') return { gifId: item.def.id, count: this.inventory.grenades, reserve: Number.NaN, t, attachments: [] };
     return null;
   }
 
@@ -253,7 +408,11 @@ export class WeaponManager {
       if (this.inspectTime > 0) this.cancelInspect();
       else {
         this.inspectTime = INSPECT_TIME;
-        this.viewmodel.play(inspectClip(INSPECT_SCALE[item!.def.category]), INSPECT_TIME);
+        this.inspectMag = inspectMagDir(item!);
+        this.viewmodel.play(
+          inspectClip(INSPECT_SCALE[item!.def.category], { tiltUp: item!.def.category === 'pistol' ? 0.22 : 0, mag: this.inspectMag }),
+          INSPECT_TIME,
+        );
       }
       return;
     }
@@ -302,7 +461,12 @@ export class WeaponManager {
     const events = gun.update(dt, held && !sprinting);
     if (events.reloaded) this.viewmodel.onReloadComplete();
 
-    if (input.wasPressed(KEYS.reload) && this.drawLock <= 0 && gun.startReload()) this.viewmodel.cancelAction();
+    // ferrolho/bomba ainda ciclando: a recarga espera a animação terminar
+    if (input.wasPressed(KEYS.reload)) this.reloadQueued = true;
+    if (this.reloadQueued && this.drawLock <= 0 && !(gun.manualAction && (gun.cycleTime > 0 || this.viewmodel.actionBusy))) {
+      this.reloadQueued = false;
+      if (gun.startReload()) this.viewmodel.cancelAction();
+    }
 
     if (sprinting) return;
     const result = gun.trigger(pressed, held);
@@ -321,11 +485,13 @@ export class WeaponManager {
     if (def.projectile) {
       this.aimDirection(this.spread * 0.5);
       const start = this.origin.clone().addScaledVector(this.dir, 0.6).add(new THREE.Vector3(0, -0.08, 0));
-      d.projectiles.launch(def.projectile, start, this.dir);
+      d.projectiles.launch(def.projectile, start, this.dir, def.id);
     } else {
+      this.aimDirection(0);
+      d.onShot?.(def.id, this.origin, this.dir, def.pellets);
       for (let i = 0; i < def.pellets; i++) {
         this.aimDirection(def.pellets > 1 ? this.spread + 0.035 : this.spread);
-        this.hitscan(def.range, def.damage);
+        this.hitscan(def.range, def.damage, def.id);
       }
     }
 
@@ -339,13 +505,14 @@ export class WeaponManager {
     d.player.addCameraClimb(def.recoil.pitch * climb, (Math.random() - 0.35) * 2 * def.recoil.yaw * climb);
     this.bloom = Math.min(this.bloom + def.recoil.pitch * 0.5, 0.06);
     this.viewmodel.onFire(def.recoil.pitch, this.adsT, gun.ammo === 0, def.shell, !gun.manualAction);
-    d.audio.shot(def.sound);
+    const suppressed = this.currentAttachments.muzzle === 'suppressor';
+    d.audio.shot(def.sound, 1, suppressed);
 
     if (gun.manualAction && gun.ammo > 0) {
       this.viewmodel.play(def.fireMode === 'pump' ? pumpCycle() : boltCycle(), gun.cycleTime);
     }
     this.flashLight.position.copy(this.origin).addScaledVector(this.dir, 0.8);
-    this.flashLight.intensity = def.sound === 'minigun' ? 3 : 6;
+    this.flashLight.intensity = suppressed ? 0 : def.sound === 'minigun' ? 3 : 6;
     this.flashTimer = 0.06;
   }
 
@@ -374,12 +541,12 @@ export class WeaponManager {
     this.d.player.aimOffsetYaw = this.armRecoil.yaw * scopeT;
   }
 
-  private hitscan(range: number, damage: number): THREE.Intersection | undefined {
+  private hitscan(range: number, damage: number, weapon = ''): THREE.Intersection | undefined {
     this.raycaster.set(this.origin, this.dir);
     this.raycaster.far = range;
     const hit = this.raycaster.intersectObjects(this.d.hitTargets, false)[0];
     // inimigo na frente do cenário recebe o tiro
-    if (this.d.enemies?.shoot(this.origin, this.dir, hit ? hit.distance : range, damage)) return hit;
+    if (this.d.enemies?.shoot(this.origin, this.dir, hit ? hit.distance : range, damage, { weapon })) return hit;
     if (hit?.face) {
       this.normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
       const handled = this.d.onHit?.(hit, this.dir, damage) ?? false;
@@ -408,10 +575,11 @@ export class WeaponManager {
     const { d } = this;
     d.camera.getWorldPosition(this.origin);
     this.dir.set(0, 0, -1).applyQuaternion(d.camera.quaternion);
+    d.onShot?.(def.id, this.origin, this.dir, 0);
     this.raycaster.set(this.origin, this.dir);
     this.raycaster.far = def.range;
     const hit = this.raycaster.intersectObjects(d.hitTargets, false)[0];
-    if (d.enemies?.shoot(this.origin, this.dir, hit ? hit.distance : def.range, def.damage * 1.4)) {
+    if (d.enemies?.shoot(this.origin, this.dir, hit ? hit.distance : def.range, def.damage * 1.4, { weapon: def.id, melee: true })) {
       d.audio.play('meleeHit', 0.8);
       d.player.shake(0.1);
       return;
@@ -461,9 +629,13 @@ export class WeaponManager {
       case 'eject':
         if (item?.kind === 'firearm') this.viewmodel.ejectShell(item.def.shell);
         break;
-      case 'ejectAll':
-        this.viewmodel.ejectShell('pistol', true);
+      case 'ejectAll': {
+        // revólver: só as cápsulas disparadas caem (as balas boas ficam no tambor)
+        const gun = this.gun;
+        const spent = gun ? Math.max(1, gun.def.magazineSize - gun.ammo) : 6;
+        this.viewmodel.ejectShell('pistol', true, spent);
         break;
+      }
       case 'hit':
         if (item?.kind === 'melee') this.meleeHit(item.def);
         break;

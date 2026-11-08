@@ -48,6 +48,8 @@ export class ZombieInstancer {
         registry.delete(mesh);
         continue;
       }
+      // desenhada direto (ex.: soldado semitransparente protegido ao renascer)
+      if (mesh.userData.direct) continue;
       const b = this.batch(mesh.material);
       if (b.count >= b.mesh.instanceMatrix.count) this.grow(mesh.material, b);
       // cor da peça (roupas são texturas neutras tingidas por instância)

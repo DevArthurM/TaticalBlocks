@@ -35,10 +35,12 @@ function glock(id: string, o: GlockOptions): WeaponModel {
   b.box('dark', [0.004, 0.012, 0.034], [0.014, 0.024, -0.04], slide);
   b.box('dark', [0.016, 0.016, 0.006], [0, 0.014, front + 0.001], slide);
   if (o.window) b.box('dark', [0.031, 0.008, 0.05], [0, 0.03, front + 0.06], slide);
-  b.box('dark', [0.007, 0.008, 0.006], [-0.0085, 0.036, 0.024], slide);
-  b.box('dark', [0.007, 0.008, 0.006], [0.0085, 0.036, 0.024], slide);
-  b.box('dark', [0.005, 0.007, 0.008], [0, 0.0365, front + 0.01], slide);
-  b.box('sight', [0.0028, 0.0028, 0.0015], [0, 0.0378, front + 0.0145], slide);
+  b.irons(() => {
+    b.box('dark', [0.007, 0.008, 0.006], [-0.0085, 0.036, 0.024], slide);
+    b.box('dark', [0.007, 0.008, 0.006], [0.0085, 0.036, 0.024], slide);
+    b.box('dark', [0.005, 0.007, 0.008], [0, 0.0365, front + 0.01], slide);
+    b.box('sight', [0.0028, 0.0028, 0.0015], [0, 0.0378, front + 0.0145], slide);
+  });
   b.anchor('muzzle', [0, 0.014, front - 0.005], slide);
   b.anchor('eject', [0.018, 0.026, -0.04], slide);
   b.anchor('slide', [0, 0.03, 0.025], slide);
@@ -72,8 +74,13 @@ export function buildRevolver(): WeaponModel {
   b.box('steel', [0.02, 0.012, 0.06], [0, 0.052, -0.03]);
   b.rod('steel', 0.02, 0.105, [0, 0.038, -0.105]);
   b.box('steel', [0.018, 0.016, 0.1], [0, 0.02, -0.105]);
-  b.box('dark', [0.006, 0.012, 0.012], [0, 0.054, -0.148]);
-  b.box('dark', [0.008, 0.02, 0.012], [0, 0.055, 0.016]); // cão
+  // massa: lâmina alta na boca do cano, com ponto claro
+  b.box('dark', [0.005, 0.018, 0.012], [0, 0.055, -0.148]);
+  b.box('sight', [0.003, 0.003, 0.002], [0, 0.0625, -0.141]);
+  // alça: entalhe no topo da armação (o cão fica abaixo da linha de visada)
+  b.box('dark', [0.005, 0.01, 0.008], [-0.0055, 0.063, 0.002]);
+  b.box('dark', [0.005, 0.01, 0.008], [0.0055, 0.063, 0.002]);
+  b.box('dark', [0.008, 0.014, 0.012], [0, 0.05, 0.02]); // cão
   b.box('steel', [0.012, 0.006, 0.04], [0, -0.012, -0.015]);
   b.box('dark', [0.006, 0.016, 0.006], [0, -0.004, -0.01]);
 
@@ -102,9 +109,17 @@ export function buildRevolver(): WeaponModel {
   b.anchor('grip', [0.004, -0.024 + 0.027, 0.004], grip);
   b.anchor('support', [-0.012, -0.024 + 0.02, -0.03], grip);
 
+  // bala solta levada pela mão até a câmara (recarga bala a bala)
+  // posição final: dentro da câmara de cima (tambor aberto), medida no modelo
+  const shell = b.part('shell', [-0.007, 0.043, -0.03]);
+  b.box('brass', [0.008, 0.008, 0.03], [0, 0, 0], shell);
+  b.box('steel', [0.006, 0.006, 0.006], [0, 0, -0.017], shell);
+  b.anchor('shell', [0, -0.006, 0.012], shell);
+
   b.anchor('muzzle', [0, 0.038, -0.162]);
-  b.anchor('sight', [0, 0.056, 0.016]);
+  b.anchor('sight', [0, 0.0625, 0.002]);
   const model = b.build(view('revolver'));
   model.parts.get('speedloader')!.visible = false;
+  model.parts.get('shell')!.visible = false;
   return model;
 }

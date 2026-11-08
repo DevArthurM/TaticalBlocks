@@ -2,7 +2,7 @@ import type { MaterialId } from '@shared/map/types';
 import * as THREE from 'three';
 import type { SoundName } from '../../audio/SoundEngine';
 
-export type DestructibleMaterial = Exclude<MaterialId, 'bedrock' | 'hospital'>;
+export type DestructibleMaterial = Exclude<MaterialId, 'bedrock'>;
 
 /** Dados para escolher a cor de cada voxel. */
 export interface VoxelCellInfo {
@@ -120,6 +120,6 @@ export const VOXEL_MATERIALS: Record<DestructibleMaterial, VoxelMaterial> = {
 };
 
 export function voxelMaterial(id: MaterialId | undefined): VoxelMaterial | null {
-  if (id === 'bedrock' || id === 'hospital') return null;
+  if (id === 'bedrock') return null;
   return VOXEL_MATERIALS[id ?? 'concrete'];
 }

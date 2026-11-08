@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { clamp, damp, lerp } from '../../core/math';
 import { Spring } from '../../core/Spring';
 import { addSample6, type Clip, type Cue, type HandValue, type Key, isVisible, segment } from '../animation/Clip';
+import type { AttachmentSlot, WeaponAttachments } from '@shared/weapons/attachments';
+import { applyAttachments } from '../models/attachments';
 import { buildWeaponModel } from '../models/registry';
 import type { AnchorName, PartName, WeaponModel } from '../models/types';
 import { ArmModel } from './ArmModel';
@@ -16,7 +18,13 @@ export interface ViewmodelFrame {
   moveSpeed: number;
   /** Velocidade lateral do jogador em m/s (+ = andando para a direita). */
   strafe: number;
+  /** Velocidade para a frente em m/s (+ = frente, − = ré). */
+  forward: number;
   sprinting: boolean;
+  /** 0..1 — deslizando. */
+  slide?: number;
+  /** 0..1 — modo de personalização (T): arma na frente da câmera. */
+  customize?: number;
   onGround: boolean;
   adsT: number;
   lookDX: number;
@@ -56,6 +64,11 @@ const FIXED_TARGETS: Record<'rest' | 'low' | 'lowRight', { left: THREE.Vector3; 
 
 const SPRINT_OFFSET = { pos: new THREE.Vector3(-0.05, -0.045, 0.03), rot: new THREE.Vector3(-0.45, 0.6, 0.28) };
 /** Mola da inércia lateral (andar de lado). */
+/** Eixo da visada no espaço da câmera dos braços (a câmera olha para −Z). */
+const SIGHT_AXIS = new THREE.Vector3(0, 0, 1);
+/** Rolagem (rad) por unidade de inércia lateral. */
+const STRAFE_ROLL = 0.2;
+
 const STRAFE_SPRING = {
   hip: { stiffness: 70, damping: 11 },
   /** ζ = 1,1 → sem oscilação; ω ≈ 4,5 rad/s → resposta em ~0,5 s. */
@@ -75,12 +88,20 @@ export class Viewmodel {
   private readonly leftArm: ArmModel;
   private readonly flash = new MuzzleFlash();
   private readonly shells: ShellEjector;
-  private readonly cache = new Map<string, { model: WeaponModel; ads: THREE.Vector3; defaultVis: Map<THREE.Object3D, boolean> }>();
+  private readonly cache = new Map<
+    string,
+    { model: WeaponModel; ads: THREE.Vector3; show: { pos: THREE.Vector3; rot: THREE.Euler }; defaultVis: Map<THREE.Object3D, boolean> }
+  >();
+
+  /** Acessórios escolhidos por arma (o modelo é refeito ao trocar). */
+  private readonly attachments = new Map<string, WeaponAttachments>();
 
   private current: {
     def: WeaponDef;
     model: WeaponModel;
     ads: THREE.Vector3;
+    /** Pose de vitrine (personalização). */
+    show: { pos: THREE.Vector3; rot: THREE.Euler };
     defaultVis: Map<THREE.Object3D, boolean>;
     /** Encaixe fixo dos braços relativo à arma (modo `rigidHands`). */
     grip?: { right: THREE.Matrix4; left: THREE.Matrix4 };
@@ -100,6 +121,13 @@ export class Viewmodel {
   /** Inércia lateral (mola de 2ª ordem: atrasa, passa um pouco do ponto e assenta). */
   private strafeX = 0;
   private strafeV = 0;
+  /**
+   * Rolagem em torno do eixo da visada (a reta da câmera que passa pela alça e
+   * pela massa): o balanço do movimento gira braços/arma ao redor da mira, que
+   * fica sempre no centro.
+   */
+  private sightRoll = 0;
+  private readonly rollQ = new THREE.Quaternion();
   private slideTimer = 1;
   private slideLocked = false;
   private barrelAngle = 0;
@@ -136,10 +164,6 @@ export class Viewmodel {
     this.shells = new ShellEjector(this.root);
   }
 
-  /** Quanto o braço está inclinado pela inércia lateral (0 = centrado). */
-  get strafeTilt(): number {
-    return Math.abs(this.strafeX);
-  }
 
   get weaponId(): string | null {
     return this.current?.def.id ?? null;
@@ -159,9 +183,102 @@ export class Viewmodel {
     this.current = { def, ...entry };
     this.leftFree = 0;
     this.poseGroup.add(entry.model.root);
-    this.flash.attach(entry.model.anchors.get('muzzle'), entry.model.view.flashScale);
+    // silenciador: sem clarão na boca do cano
+    this.flash.attach(entry.model.anchors.get('muzzle'), entry.model.root.userData.suppressed ? 0 : entry.model.view.flashScale);
     if (entry.model.view.rigidHands) this.current.grip = this.computeGripRig(entry.model);
     if (drawClip) this.play(drawClip, drawTime);
+  }
+
+  /** Enquadramento da vitrine (T) congelado: pré-visualizar acessórios não faz a arma pular. */
+  private lockedShow: { pos: THREE.Vector3; rot: THREE.Euler } | null = null;
+
+  lockShowcase(on: boolean): void {
+    this.lockedShow = on && this.current ? this.current.show : null;
+  }
+
+  /**
+   * Onde cada encaixe de acessório fica na arma atual (espaço do viewmodel), para o
+   * editor do T ligar uma linha do ponto até o quadrado da opção.
+   */
+  slotPoints(): Partial<Record<AttachmentSlot, THREE.Vector3>> {
+    const model = this.current?.model;
+    if (!model) return {};
+    model.root.updateWorldMatrix(true, true); // inclui a pose/balanço da mão neste quadro
+    const world = (o: THREE.Object3D | undefined, local?: THREE.Vector3): THREE.Vector3 | undefined =>
+      o ? (local ? o.localToWorld(local.clone()) : o.getWorldPosition(new THREE.Vector3())) : undefined;
+    const rootPt = (x: number, y: number, z: number) => model.root.localToWorld(new THREE.Vector3(x, y, z));
+    const anchor = (n: AnchorName) => model.anchors.get(n);
+    const rootPos = (n: AnchorName) => {
+      const a = anchor(n);
+      return a ? model.root.worldToLocal(a.getWorldPosition(new THREE.Vector3())) : null;
+    };
+    const center = (o: THREE.Object3D | undefined) => (o ? new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()) : undefined);
+    let optic: THREE.Object3D | undefined;
+    model.root.traverse((o) => {
+      if (o.name === 'optic') optic = o;
+    });
+    const out: Partial<Record<AttachmentSlot, THREE.Vector3>> = {};
+    out.optic = center(optic) ?? world(anchor('sight'));
+    out.muzzle = world(anchor('muzzle'));
+    out.magazine = center(model.parts.get('mag')) ?? world(anchor('mag'));
+    // trilho: mesmo ponto onde o módulo é montado (lado direito do guarda-mão / sob o cano na pistola)
+    const muzzle = rootPos('muzzle');
+    const support = rootPos('support');
+    if (muzzle) {
+      out.rail =
+        world(anchor('light')) ??
+        world(anchor('laser')) ??
+        (this.current!.def.category === 'pistol' || !support
+          ? rootPt(0, muzzle.y - 0.028, muzzle.z + 0.045)
+          : rootPt(0.034, support.y + 0.04, support.z + (muzzle.z - support.z) * 0.3));
+    }
+    out.grip = world(anchor('support'));
+    return out;
+  }
+
+  /** Troca os acessórios de uma arma: refaz o modelo (e troca na hora se estiver na mão). */
+  setAttachments(id: string, att: WeaponAttachments): void {
+    this.attachments.set(id, att);
+    const old = this.cache.get(id);
+    if (!old) return;
+    this.cache.delete(id);
+    if (this.current?.def.id === id) {
+      const def = this.current.def;
+      this.equip(def, null, 0);
+    }
+  }
+
+  /**
+   * Feixe do laser (só na primeira pessoa): um traço vermelho simples e curto saindo
+   * do módulo, preso à arma. Mesmo comprimento visível em todas as armas (descontada a escala).
+   */
+  private addLaserBeam(model: WeaponModel): void {
+    const a = model.anchors.get('laser');
+    if (!a) return;
+    // do módulo até passar um pouco da boca do cano (silenciador incluso)
+    model.root.updateMatrixWorld(true);
+    const local = (o: THREE.Object3D) => model.root.worldToLocal(o.getWorldPosition(new THREE.Vector3()));
+    const muzzle = model.anchors.get('muzzle');
+    const toMuzzle = muzzle ? Math.max(0, local(a).z - local(muzzle).z) : 0;
+    const len = toMuzzle + LASER_BEAM.length / model.view.scale;
+    const t = LASER_BEAM.thickness / model.view.scale;
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(t, t, len).translate(0, 0, -len / 2), LASER_BEAM_MAT);
+    beam.frustumCulled = false;
+    beam.userData.beam = true;
+    a.add(beam);
+  }
+
+  /**
+   * Posição e direção (para onde o cano aponta) de uma âncora no espaço da câmera
+   * do viewmodel, que coincide com o espaço local da câmera do mundo.
+   */
+  anchorFrame(name: AnchorName, pos: THREE.Vector3, dir: THREE.Vector3): boolean {
+    const a = this.current?.model.anchors.get(name);
+    if (!a || this.modelHidden) return false;
+    a.updateWorldMatrix(true, false);
+    a.getWorldPosition(pos);
+    a.getWorldDirection(dir).negate();
+    return true;
   }
 
   /** Pré-carrega um modelo (evita travadas na primeira troca). */
@@ -206,12 +323,12 @@ export class Viewmodel {
     this.modelHidden = hidden;
   }
 
-  ejectShell(shell: ShellType, all = false): void {
+  ejectShell(shell: ShellType, all = false, count = 6): void {
     const m = this.current?.model;
     if (!m) return;
     if (all) {
       const at = m.anchors.get('cylinder') ?? m.anchors.get('grip');
-      if (at) for (let i = 0; i < 6; i++) this.shells.spawn(at, 'pistol', true);
+      if (at) for (let i = 0; i < count; i++) this.shells.spawn(at, 'pistol', true);
       return;
     }
     const at = m.anchors.get('eject');
@@ -229,6 +346,8 @@ export class Viewmodel {
   update(f: ViewmodelFrame): void {
     const cur = this.current;
     this.flash.update(f.dt);
+    // laser: intensidade oscila com ruído de Perlin 1D em loop
+    LASER_BEAM_MAT.opacity = LASER_FLICKER.base * (1 + LASER_FLICKER.depth * laserNoise(f.time));
     this.shells.update(f.dt);
     this.root.visible = !!cur && !f.hidden;
     if (!cur) return;
@@ -288,9 +407,16 @@ export class Viewmodel {
     this.tmpA.copy(SPRINT_OFFSET.rot).multiplyScalar(this.sprintT * (cur.def.category === 'heavy' ? 0.5 : 1));
     this.rot.add(this.tmpA);
 
+    this.sightRoll = 0;
+    // deslize: arma inclina para o lado e desce um pouco (mirando, gira em torno da visada)
+    const slide = f.slide ?? 0;
+    this.pos.y -= slide * 0.03 * (1 - f.adsT);
+    this.rot.z += slide * 0.28 * (1 - f.adsT);
+    this.sightRoll += slide * 0.12 * f.adsT;
     this.applyBob(f);
     this.applySway(f);
     this.applyStrafeInertia(f);
+    this.applyForwardTilt(f);
 
     // escalada: arma desce e sai de cena enquanto as mãos vão para a quina
     this.ledgeT = damp(this.ledgeT, f.ledge ? 1 : 0, 12, f.dt);
@@ -301,9 +427,29 @@ export class Viewmodel {
     this.pos.y -= this.ledgeT * 0.34;
     this.rot.x -= this.ledgeT * 0.7;
 
+    // personalização (T): arma centralizada na frente da câmera, de lado, oscilando de leve
+    const cz = smooth01(f.customize ?? 0);
+    if (cz > 0) {
+      const sh = this.lockedShow ?? cur.show;
+      const t = f.time;
+      this.pos.lerp(this.tmpA.set(sh.pos.x, sh.pos.y + Math.sin(t * 0.9) * 0.004, sh.pos.z + Math.sin(t * 0.6) * 0.006), cz);
+      this.rot.set(
+        lerp(this.rot.x, sh.rot.x + Math.sin(t * 0.7) * 0.025, cz),
+        lerp(this.rot.y, sh.rot.y + Math.sin(t * 0.45) * 0.06, cz),
+        lerp(this.rot.z, sh.rot.z + Math.sin(t * 0.55 + 1) * 0.02, cz),
+      );
+      this.sightRoll *= 1 - cz;
+    }
+
     const p = this.pose;
     this.poseGroup.position.set(this.pos.x + p[0], this.pos.y + p[1] + this.landing.value, this.pos.z + p[2] + this.recoilPos.value * 0.04);
     this.poseGroup.rotation.set(this.rot.x + p[3] + this.recoilRot.value * 0.035, this.rot.y + p[4], this.rot.z + p[5]);
+    // balanço do movimento: gira tudo em torno do eixo da visada (a mira não sai do centro)
+    if (this.sightRoll !== 0) {
+      this.rollQ.setFromAxisAngle(SIGHT_AXIS, this.sightRoll);
+      this.poseGroup.position.applyQuaternion(this.rollQ);
+      this.poseGroup.quaternion.premultiply(this.rollQ);
+    }
 
     // ── peças ──
     this.updateParts(cur, f, visOverrides, reloading);
@@ -327,7 +473,7 @@ export class Viewmodel {
       // mão direita: presa rigidamente à arma (mesmo encaixe da pose de referência)
       this.applyRigid(this.rightArm, cur.grip.right);
       // mão esquerda: presa à arma; na recarga solta suavemente e segue a animação
-      this.leftFree = damp(this.leftFree, f.reload ? 1 : 0, 14, f.dt);
+      this.leftFree = damp(this.leftFree, f.reload || this.action?.clip.left ? 1 : 0, 14, f.dt);
       if (this.leftFree < 0.001) {
         this.applyRigid(this.leftArm, cur.grip.left);
       } else {
@@ -346,6 +492,12 @@ export class Viewmodel {
     }
 
     this.applyElbowTension(f);
+
+    // personalização (T) com pistola: só a mão direita segura; a esquerda desce para fora do quadro
+    if (cz > 0 && cur.def.category === 'pistol') {
+      this.leftArm.root.position.addScaledVector(SHOW_LEFT_DROP, cz);
+      this.leftArm.root.rotateX(-0.6 * cz);
+    }
   }
 
   /**
@@ -411,6 +563,9 @@ export class Viewmodel {
     let entry = this.cache.get(id);
     if (!entry) {
       const model = buildWeaponModel(id);
+      const att = this.attachments.get(id);
+      if (att) applyAttachments(model, att);
+      this.addLaserBeam(model);
       model.root.updateMatrixWorld(true);
       const ads = new THREE.Vector3();
       const sight = model.anchors.get('sight');
@@ -422,7 +577,7 @@ export class Viewmodel {
       }
       const defaultVis = new Map<THREE.Object3D, boolean>();
       for (const part of model.parts.values()) defaultVis.set(part, part.visible);
-      entry = { model, ads, defaultVis };
+      entry = { model, ads, show: showcasePose(model), defaultVis };
       this.cache.set(id, entry);
     }
     return entry;
@@ -508,13 +663,16 @@ export class Viewmodel {
     const moving = f.onGround ? clamp(f.moveSpeed / 4.6, 0, 1.7) : 0;
     this.bobAmount = damp(this.bobAmount, moving, 8, f.dt);
     this.bobPhase += f.dt * lerp(8.5, 12.5, this.sprintT) * (moving > 0.05 ? 1 : 0);
-    const amp = this.bobAmount * lerp(1, 0.12, f.adsT) * (1 + this.sprintT * 1.4);
+    const amp = this.bobAmount * (1 + this.sprintT * 1.4);
     const s = Math.sin(this.bobPhase);
     const c = Math.cos(this.bobPhase);
-    this.pos.x += s * 0.007 * amp;
-    this.pos.y += -Math.abs(c) * 0.0065 * amp;
-    this.rot.z += s * 0.025 * amp;
-    this.rot.x += Math.abs(c) * 0.01 * amp;
+    // quadril: a arma balança solta; mirando: só gira em torno da visada
+    const free = 1 - f.adsT;
+    this.pos.x += s * 0.007 * amp * free;
+    this.pos.y += -Math.abs(c) * 0.0065 * amp * free;
+    this.rot.z += s * 0.025 * amp * free;
+    this.rot.x += Math.abs(c) * 0.01 * amp * free;
+    this.sightRoll += s * 0.03 * amp * f.adsT;
     const breathe = 1 - f.adsT * 0.85;
     this.pos.y += Math.sin(f.time * 1.7) * 0.0012 * breathe;
     this.rot.x += Math.sin(f.time * 1.7 + 0.6) * 0.004 * breathe;
@@ -539,24 +697,37 @@ export class Viewmodel {
       this.strafeX += this.strafeV * h;
       remaining -= h;
     }
-    // mesma intensidade mirando ou não; só reduz na corrida
+    // mesma intensidade mirando ou não; só reduz na corrida.
+    // Braços e arma giram em torno do eixo da visada (alça e massa ficam no centro),
+    // rolando para o lado oposto ao movimento.
     const k = 1 - this.sprintT * 0.5;
-    const s = this.strafeX * k;
-    this.pos.x += s * 0.028;
-    this.pos.y -= Math.abs(s) * 0.006;
-    this.rot.z -= s * 0.16; // rola para o lado oposto ao movimento
-    this.rot.y -= s * 0.06;
+    this.sightRoll -= this.strafeX * k * STRAFE_ROLL;
+  }
+
+  private forwardTilt = 0;
+  /**
+   * Andando para a frente o cano (e os braços junto) aponta sutilmente para baixo;
+   * de ré, para cima. Quase nada mirando (a visada fica no centro) e nada correndo.
+   */
+  private applyForwardTilt(f: ViewmodelFrame): void {
+    const target = f.onGround ? clamp(f.forward / 4.6, -1, 1.2) : 0;
+    this.forwardTilt = damp(this.forwardTilt, target, 5, f.dt);
+    const k = (1 - f.adsT * 0.85) * (1 - this.sprintT);
+    this.rot.x -= this.forwardTilt * FORWARD_TILT * k;
+    this.pos.y -= this.forwardTilt * 0.006 * k;
   }
 
   private applySway(f: ViewmodelFrame): void {
     const k = lerp(1, 0.3, f.adsT);
     this.swayX = damp(this.swayX, clamp(-f.lookDX * 0.0003, -0.025, 0.025) * k, 9, f.dt);
     this.swayY = damp(this.swayY, clamp(f.lookDY * 0.0003, -0.025, 0.025) * k, 9, f.dt);
-    this.pos.x += this.swayX;
-    this.pos.y += this.swayY;
-    this.rot.y += this.swayX * 2.4;
-    this.rot.z -= this.swayX * 1.6;
-    this.rot.x -= this.swayY * 1.6;
+    const free = 1 - f.adsT;
+    this.pos.x += this.swayX * free;
+    this.pos.y += this.swayY * free;
+    this.rot.y += this.swayX * 2.4 * free;
+    this.rot.z -= this.swayX * 1.6 * free;
+    this.rot.x -= this.swayY * 1.6 * free;
+    this.sightRoll -= this.swayX * 1.6 * f.adsT;
   }
 
   private readonly vmLights: { light: THREE.Light; base: number }[] = [];
@@ -576,4 +747,88 @@ export class Viewmodel {
     for (const light of [hemi, key, rim]) this.vmLights.push({ light, base: light.intensity });
   }
 
+}
+
+const LASER_BEAM_MAT = new THREE.MeshBasicMaterial({
+  color: 0xff2a1c,
+  transparent: true,
+  // fraco, mas visível também contra paredes claras (aditivo sumia no branco)
+  opacity: 0.32,
+  depthWrite: false,
+});
+
+/** Oscilação da intensidade do laser: opacidade base, variação (±) e ruído. */
+const LASER_FLICKER = {
+  base: 0.45,
+  /** ±fração da opacidade base no pico do ruído. */
+  depth: 0.45,
+  /** Pontos da grade do ruído (o loop se repete a cada `cells / speed` s). */
+  cells: 8,
+  /** Células por segundo. */
+  speed: 4,
+};
+
+/** Gradientes fixos (−1..1) de cada ponto da grade: hash simples, alternando o sinal. */
+const LASER_GRADS = Array.from({ length: LASER_FLICKER.cells }, (_, i) => {
+  const h = Math.abs(Math.sin(i * 78.233 + 1.7) * 43758.5453) % 1;
+  return (0.4 + 0.6 * h) * (i % 2 ? -1 : 1);
+});
+
+/**
+ * Ruído de Perlin 1D periódico, normalizado para −1..1: em cada célula interpola as rampas dos
+ * gradientes das duas pontas com a curva suave 6t⁵−15t⁴+10t³. A grade dá a volta
+ * (o último ponto liga no primeiro), então a animação repete em loop sem emenda.
+ */
+function laserNoise(time: number): number {
+  const n = LASER_FLICKER.cells;
+  const x = (((time * LASER_FLICKER.speed) % n) + n) % n;
+  const i = Math.floor(x);
+  const t = x - i;
+  const a = LASER_GRADS[i] * t;
+  const b = LASER_GRADS[(i + 1) % n] * (t - 1);
+  const fade = t * t * t * (t * (t * 6 - 15) + 10);
+  // o Perlin 1D fica em ±0,5·|g| no meio da célula: ×2,5 aproxima de ±1
+  return Math.max(-1, Math.min(1, (a + (b - a) * fade) * 2.5));
+}
+
+const smooth01 = (x: number): number => {
+  const k = Math.min(1, Math.max(0, x));
+  return k * k * (3 - 2 * k);
+};
+
+/** Inclinação do cano (rad) andando para a frente na velocidade de caminhada. */
+const FORWARD_TILT = 0.06;
+
+/** Traço do laser: quanto passa da boca do cano e espessura (m no espaço da câmera, igual em todas as armas). */
+const LASER_BEAM = { length: 0.3, thickness: 0.003 };
+
+/** Quanto a mão esquerda desce/recua na vitrine de pistolas (sai do quadro). */
+const SHOW_LEFT_DROP = new THREE.Vector3(-0.12, -0.55, 0.12);
+
+/**
+ * Rotação da vitrine: cano para a esquerda e empunhadura à direita (cada mão do seu
+ * lado, sem cruzar os braços); lado esquerdo da arma virado para a câmera, um pouco de cima.
+ */
+const SHOW_ROT = new THREE.Euler(0.16, 1.2, -0.05);
+
+/**
+ * Pose de vitrine: posiciona o centro da arma no meio da tela, a uma distância
+ * que faz a arma inteira caber no quadro.
+ */
+function showcasePose(model: WeaponModel): { pos: THREE.Vector3; rot: THREE.Euler } {
+  model.root.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  model.root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && o.visible && !o.userData.beam) box.expandByObject(o, true);
+  });
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const length = Math.max(size.x, size.y, size.z);
+  // perto da câmera: a arma ocupa boa parte da tela (as pontas podem sair um pouco)
+  // (armas curtas têm distância mínima para a mão não sair do quadro)
+  const dist = Math.max(0.27, 0.1 + length * 0.62);
+  const q = new THREE.Quaternion().setFromEuler(SHOW_ROT);
+  // posição do grupo = alvo − R·centro
+  const pos = new THREE.Vector3(0.0, -0.01, -dist).sub(center.applyQuaternion(q));
+  return { pos, rot: SHOW_ROT.clone() };
 }

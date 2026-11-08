@@ -38,6 +38,17 @@ const BASE = {
 };
 
 const gifUrl = (id: string) => `/weapons/gifs/${id}.gif`;
+/** GIFs já baixados e decodificados (trocar de lista não pisca esperando imagem). */
+const gifCache = new Map<string, HTMLImageElement>();
+function preloadGifs(ids: Iterable<string>): void {
+  for (const id of ids) {
+    if (gifCache.has(id)) continue;
+    const img = new Image();
+    img.src = gifUrl(id);
+    img.decode().catch(() => {});
+    gifCache.set(id, img);
+  }
+}
 const gifCircle = (id: string, extra = '') =>
   `<span class="aw-gif ${extra}"><img src="${gifUrl(id)}" alt="" draggable="false" onerror="this.style.visibility='hidden'" /></span>`;
 
@@ -76,6 +87,7 @@ export class ArsenalWheel {
     this.root.addEventListener('mousedown', (e) => e.stopPropagation());
     this.root.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('resize', () => this.openState && this.build());
+    preloadGifs(catalog.map((w) => w.id));
   }
 
   get isOpen(): boolean {
@@ -106,6 +118,7 @@ export class ArsenalWheel {
 
   setCatalog(catalog: readonly WeaponDef[]): void {
     this.catalog = catalog;
+    preloadGifs(catalog.map((w) => w.id));
   }
 
   setStatus(text: string): void {
@@ -271,6 +284,7 @@ export class ArsenalWheel {
     return CATEGORIES.filter((c) => c.slot === slot && this.catalog.some((w) => w.category === c.id)).map((c) => c.id);
   }
 
+  /** Arcos completos (ao abrir um compartimento): categorias + armas da categoria. */
   private renderBands(): void {
     const host = this.stage.querySelector('.aw-bands')!;
     const b = this.band;
@@ -278,14 +292,11 @@ export class ArsenalWheel {
       host.innerHTML = '';
       return;
     }
-    const { bandR1, bandR2, bandWidth, circle } = this.px;
-    const step = (r: number) => (((circle + 12 * this.s) / r) * 180) / Math.PI;
-
+    const { bandR1, bandWidth, circle } = this.px;
     const cats = this.categoriesFor(b.slot);
-    const catStep = step(bandR1) * b.dir;
+    const catStep = this.bandStep(bandR1) * b.dir;
     const catEnd = b.deg + catStep * (cats.length - 1);
-    let svg = this.bandPath(bandR1, b.deg, catEnd, bandWidth, 'cat');
-    let html = cats
+    const html = cats
       .map((id, i) => {
         const deg = b.deg + catStep * i;
         const p = polar(bandR1, deg);
@@ -297,24 +308,55 @@ export class ArsenalWheel {
           ${gifCircle(sample.id)}<span class="aw-cat-label">${info.label}</span></div>`;
       })
       .join('');
+    host.innerHTML = `<div class="aw-band-layer">${this.bandSvg(this.bandPath(bandR1, b.deg, catEnd, bandWidth, 'cat'))}${html}</div><div class="aw-band-layer aw-weapons-layer"></div>`;
+    this.renderWeaponBand(false);
+  }
 
-    if (b.category) {
-      const weapons = this.catalog.filter((w) => w.category === b.category).sort((a, z) => a.tier - z.tier);
-      const wStep = step(bandR2) * b.dir;
-      const start = b.catDeg;
-      svg += this.bandPath(bandR2, start, start + wStep * (weapons.length - 1), bandWidth, 'weapons');
-      const current = this.loadout[b.slot];
-      html += weapons
-        .map((w, i) => {
-          const deg = start + wStep * i;
-          const p = polar(bandR2, deg);
-          return `<div class="aw-piece aw-option aw-weapon tier-${w.tier} ${w.id === current ? 'selected' : ''}" data-pick="${w.id}"
-            style="--x:${p.x}px;--y:${p.y}px;--d:${60 + i * 35}ms;--c:${circle}px">${gifCircle(w.id)}</div>`;
-        })
-        .join('');
+  /**
+   * Só o arco de armas (ao trocar de categoria): as categorias ficam onde estão
+   * (sem reanimar) e a lista antiga some enquanto a nova entra.
+   */
+  private renderWeaponBand(swap = true): void {
+    const b = this.band;
+    const layer = this.stage.querySelector<HTMLElement>('.aw-weapons-layer');
+    if (!b || !layer) return;
+    this.stage.querySelectorAll<HTMLElement>('.aw-cat').forEach((el) => el.classList.toggle('active', el.dataset.cat === b.category));
+    if (swap && layer.childElementCount) {
+      // a lista anterior sai em fade (sem cliques) por cima da nova
+      const old = layer.cloneNode(true) as HTMLElement;
+      old.classList.remove('aw-weapons-layer');
+      old.classList.add('aw-leaving');
+      layer.before(old);
+      window.setTimeout(() => old.remove(), 160);
     }
-    const size = (bandR2 + bandWidth) * 2;
-    host.innerHTML = `<svg class="aw-band-svg" width="${size}" height="${size}" viewBox="${-size / 2} ${-size / 2} ${size} ${size}">${svg}</svg>${html}`;
+    if (!b.category) {
+      layer.innerHTML = '';
+      return;
+    }
+    const { bandR2, bandWidth, circle } = this.px;
+    const weapons = this.catalog.filter((w) => w.category === b.category).sort((a, z) => a.tier - z.tier);
+    const wStep = this.bandStep(bandR2) * b.dir;
+    const start = b.catDeg;
+    const current = this.loadout[b.slot];
+    const html = weapons
+      .map((w, i) => {
+        const deg = start + wStep * i;
+        const p = polar(bandR2, deg);
+        return `<div class="aw-piece aw-option aw-weapon tier-${w.tier} ${w.id === current ? 'selected' : ''}" data-pick="${w.id}"
+            style="--x:${p.x}px;--y:${p.y}px;--d:${(swap ? 0 : 60) + i * (swap ? 18 : 35)}ms;--c:${circle}px">${gifCircle(w.id)}</div>`;
+      })
+      .join('');
+    layer.classList.toggle('aw-swap', swap);
+    layer.innerHTML = this.bandSvg(this.bandPath(bandR2, start, start + wStep * (weapons.length - 1), bandWidth, 'weapons')) + html;
+  }
+
+  private bandStep(r: number): number {
+    return (((this.px.circle + 12 * this.s) / r) * 180) / Math.PI;
+  }
+
+  private bandSvg(paths: string): string {
+    const size = (this.px.bandR2 + this.px.bandWidth) * 2;
+    return `<svg class="aw-band-svg" width="${size}" height="${size}" viewBox="${-size / 2} ${-size / 2} ${size} ${size}">${paths}</svg>`;
   }
 
   private bandPath(r: number, a0: number, a1: number, width: number, kind: string): string {
@@ -355,7 +397,7 @@ export class ArsenalWheel {
       if (this.band.category !== cat) {
         this.band.category = cat;
         this.band.catDeg = Number(t.dataset.deg);
-        this.renderBands();
+        this.renderWeaponBand();
       }
       const info = CATEGORIES.find((c) => c.id === cat)!;
       this.renderCenter(null, info.label.toUpperCase(), `${this.catalog.filter((w) => w.category === cat).length} armas`);

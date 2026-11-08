@@ -92,6 +92,13 @@
 }
 .aw-band-weapons { stroke: rgba(14, 17, 24, 0.6); animation-delay: 30ms; }
 @keyframes aw-draw { to { stroke-dashoffset: 0; } }
+.aw-band-layer { position: absolute; left: 0; top: 0; }
+/* troca de categoria: a lista antiga sai rápido; a nova entra mais curta (sem "piscar") */
+.aw-leaving { pointer-events: none; animation: aw-fade-out 0.15s ease-out forwards; }
+.aw-leaving * { animation: none !important; }
+.aw-leaving .aw-band { stroke-dashoffset: 0; }
+.aw-swap .aw-option { animation-duration: 0.18s; }
+.aw-swap .aw-band { animation-duration: 0.18s; animation-delay: 0ms; }
 
 .aw-option { cursor: pointer; border-radius: 50%; animation-name: aw-pop-local; animation-duration: 0.28s; }
 @keyframes aw-pop-local { from { opacity: 0; transform: translate(-50%, -50%) scale(0.2); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }

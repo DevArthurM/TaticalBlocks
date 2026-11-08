@@ -4,11 +4,8 @@ export interface Vec3 {
   z: number;
 }
 
-/**
- * Material de um bloco. `bedrock` = indestrutível (borda do mapa);
- * `hospital` = parede/teto de azulejo indestrutível.
- */
-export type MaterialId = 'concrete' | 'wood' | 'metal' | 'plastic' | 'bedrock' | 'hospital';
+/** Material de um bloco. `bedrock` = indestrutível (borda do mapa). */
+export type MaterialId = 'concrete' | 'wood' | 'metal' | 'plastic' | 'bedrock';
 
 /** Abertura com tábuas que os zumbis arrancam e o jogador reconstrói. */
 export interface BarricadeData {
@@ -22,8 +19,6 @@ export interface BarricadeData {
   /** Direção (horizontal) que aponta para FORA do prédio. */
   outward: { x: number; z: number };
 }
-
-export type Environment = 'outdoor' | 'hospital';
 
 /** Caixa alinhada aos eixos. `position.y` é a base; x/z são o centro. */
 export interface BoxData {
@@ -43,11 +38,9 @@ export interface MapData {
   wallHeight: number;
   spawn: Vec3;
   boxes: BoxData[];
-  /** Ambientação (luz, céu, piso). Padrão: ao ar livre. */
-  environment?: Environment;
   barricades?: BarricadeData[];
   /** Caixas com física em posições fixas (sem isso, são espalhadas ao acaso). */
   crates?: { x: number; z: number; size: number; stack?: number }[];
-  /** Luzes de teto (fluorescentes); `flicker` = falhando. */
-  lights?: { position: Vec3; flicker?: boolean }[];
+  /** Paredes invisíveis altas na borda (`size`): ninguém sai do mapa escalando. */
+  invisibleWalls?: boolean;
 }

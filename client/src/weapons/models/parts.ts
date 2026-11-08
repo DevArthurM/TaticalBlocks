@@ -18,10 +18,12 @@ export function triggerGuard(b: ModelBuilder, mat: MatKey = 'black') {
 
 /** Alça de mira traseira + massa frontal; registra a âncora `sight`. */
 export function ironSights(b: ModelBuilder, y: number, rearZ: number, frontZ: number, frontY = y) {
-  b.box('dark', [0.006, 0.014, 0.01], [-0.009, y + 0.007, rearZ]);
-  b.box('dark', [0.006, 0.014, 0.01], [0.009, y + 0.007, rearZ]);
-  b.box('dark', [0.005, frontY - y + 0.016, 0.008], [0, (y + frontY) / 2 + 0.008, frontZ]);
-  b.box('sight', [0.003, 0.003, 0.002], [0, frontY + 0.014, frontZ + 0.005]);
+  b.irons(() => {
+    b.box('dark', [0.006, 0.014, 0.01], [-0.009, y + 0.007, rearZ]);
+    b.box('dark', [0.006, 0.014, 0.01], [0.009, y + 0.007, rearZ]);
+    b.box('dark', [0.005, frontY - y + 0.016, 0.008], [0, (y + frontY) / 2 + 0.008, frontZ]);
+    b.box('sight', [0.003, 0.003, 0.002], [0, frontY + 0.014, frontZ + 0.005]);
+  });
   b.anchor('sight', [0, y + 0.012, rearZ]);
 }
 
@@ -30,8 +32,9 @@ export function redDot(b: ModelBuilder, y: number, z: number) {
   b.box('black', [0.006, 0.03, 0.04], [-0.014, y + 0.025, z]);
   b.box('black', [0.006, 0.03, 0.04], [0.014, y + 0.025, z]);
   b.box('black', [0.034, 0.006, 0.04], [0, y + 0.043, z]);
-  b.box('lens', [0.022, 0.022, 0.002], [0, y + 0.026, z + 0.012]);
-  b.box('redDot', [0.003, 0.003, 0.001], [0, y + 0.026, z - 0.01]);
+  // janela de vidro na frente e ponto vermelho no centro da janela (sempre visível ao mirar)
+  b.box('glass', [0.022, 0.022, 0.002], [0, y + 0.026, z - 0.019]);
+  b.box('redDot', [0.0025, 0.0025, 0.001], [0, y + 0.026, z - 0.017]);
   b.anchor('sight', [0, y + 0.026, z + 0.03]);
 }
 

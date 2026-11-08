@@ -8,7 +8,7 @@ export class MapController {
 
   @Get()
   getMap(@Query('mode') mode?: string, @Query('seed', new ParseIntPipe({ optional: true })) seed?: number): MapDto {
-    const m = mode === 'classic' || mode === 'hospital' ? mode : 'voxel';
+    const m = mode === 'classic' ? mode : 'voxel';
     return this.mapService.getMap(m, seed);
   }
 }

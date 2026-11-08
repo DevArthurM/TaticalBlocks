@@ -5,6 +5,7 @@ import { clamp, damp } from '../core/math';
 import type { Vec3 } from '../shared/types';
 import { type CapsuleBox, intersects, moveAndCollide } from './Collision';
 import { LedgeClimb, type LedgePhase } from './LedgeClimb';
+import { Vault } from './Vault';
 
 /** Inclinação lateral da cabeça. */
 /**
@@ -20,6 +21,20 @@ const CLIMB = {
   recoverFraction: 0.4,
   /** Velocidade da volta (1/s). */
   recoverRate: 6,
+} as const;
+
+/** Deslize: correndo + C. */
+const SLIDE = {
+  /** Impulso sobre a velocidade de corrida. */
+  boost: 1.3,
+  /** Duração máxima (s). */
+  duration: 0.9,
+  /** Desaceleração (1/s) — atrito do chão. */
+  friction: 1.5,
+  /** Quanto o jogador consegue corrigir a direção (1/s). */
+  steer: 1.6,
+  /** Abaixo desta velocidade o deslize acaba. */
+  minSpeed: 2.2,
 } as const;
 
 const LEAN = {
@@ -65,8 +80,20 @@ export class PlayerController {
   private recoilKick = 0;
   private lean = 0;
   private readonly ledge: LedgeClimb;
+  private readonly vault: Vault;
+  private vaultSpeed = 0;
   private crouched = false;
   private crouchT = 0;
+  /** Deslize em andamento: tempo restante, direção e velocidade. */
+  private slideTime = 0;
+  private slideSpeed = 0;
+  private readonly slideDir = new THREE.Vector3();
+  /** 0..1 suavizado (câmera, arma, corpo, rede). */
+  private slideT = 0;
+  /** Após deslizar, só volta a correr depois de soltar Shift/W. */
+  private slideLock = false;
+  /** Disparou neste quadro (som/poeira). */
+  slideStarted = false;
   private speedCap: number = PLAYER.walkSpeed;
   private leanLimit: number = LEAN.offset;
   private readonly leanRay = new THREE.Ray();
@@ -83,6 +110,7 @@ export class PlayerController {
     this.position.set(spawn.x, spawn.y, spawn.z);
     this.body = { position: this.position, radius: PLAYER.radius, height: PLAYER.height };
     this.ledge = new LedgeClimb(colliders, PLAYER.radius, PLAYER.height, PLAYER.eyeHeight);
+    this.vault = new Vault(colliders, PLAYER.radius, PLAYER.height);
     this.syncCamera();
   }
 
@@ -114,10 +142,13 @@ export class PlayerController {
     this.shake(0.25);
   }
 
+  /** Regeneração de vida (desligada no online: o servidor manda na vida). */
+  regen = true;
+
   private updateHealth(dt: number): void {
     this.sinceHurt += dt;
     this.hurt = Math.max(0, this.hurt - dt * 1.5);
-    if (this.sinceHurt > 3.5 && this.health > 0) this.health = Math.min(100, this.health + 14 * dt);
+    if (this.regen && this.sinceHurt > 3.5 && this.health > 0) this.health = Math.min(100, this.health + 14 * dt);
   }
 
   /** Desvio de mira transferido para a câmera (luneta), em rad. */
@@ -207,6 +238,53 @@ export class PlayerController {
    * Agachar (C alterna). Correr para frente ou pular levantam o jogador.
    * Só levanta se houver espaço acima da cabeça.
    */
+  private startSlide(): void {
+    const hs = Math.hypot(this.velocity.x, this.velocity.z);
+    if (hs > 0.5) this.slideDir.set(this.velocity.x / hs, 0, this.velocity.z / hs);
+    else this.slideDir.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    this.slideSpeed = Math.max(hs, PLAYER.sprintSpeed * this.speedMultiplier) * SLIDE.boost;
+    this.slideTime = SLIDE.duration;
+    this.crouched = true;
+    this.sprinting = false;
+    this.slideLock = true;
+    this.slideStarted = true;
+  }
+
+  /** Durante o deslize: desacelera, corrige pouco a direção; Espaço pula com o embalo. */
+  private updateSlide(dt: number, input: Input): void {
+    this.slideTime -= dt;
+    this.slideSpeed = damp(this.slideSpeed, 0, SLIDE.friction, dt);
+    if (this.wish.lengthSq() > 0) {
+      this.slideDir.lerp(this.wish, Math.min(1, SLIDE.steer * dt)).setY(0).normalize();
+    }
+    this.velocity.x = this.slideDir.x * this.slideSpeed;
+    this.velocity.z = this.slideDir.z * this.slideSpeed;
+    this.speedCap = this.slideSpeed;
+    this.sprinting = false;
+    // agachado durante o deslize (o corpo abaixa já)
+    this.crouchT = damp(this.crouchT, 1, 18, dt);
+    this.body.height = PLAYER.height + (PLAYER.crouchHeight - PLAYER.height) * this.crouchT;
+    const jump = this.onGround && input.wasPressed(KEYS.jump) && this.canStand();
+    if (jump) {
+      // pulo no deslize: levanta e conserva o embalo
+      this.crouched = false;
+      this.velocity.y = PLAYER.jumpVelocity;
+      this.onGround = false;
+    }
+    if (jump || this.slideTime <= 0 || this.slideSpeed < SLIDE.minSpeed || !this.onGround) {
+      this.slideTime = 0;
+    }
+  }
+
+  /** 0..1: quanto o jogador está deslizando (câmera, arma, corpo e rede). */
+  get slideAmount(): number {
+    return this.slideT;
+  }
+
+  get sliding(): boolean {
+    return this.slideTime > 0;
+  }
+
   private updateCrouch(dt: number, input: Input, wantsSprintForward: boolean): void {
     if (input.wasPressed(KEYS.crouch)) {
       if (!this.crouched) this.crouched = true;
@@ -229,7 +307,8 @@ export class PlayerController {
   }
 
   private get eyeHeight(): number {
-    return PLAYER.eyeHeight + (PLAYER.crouchEyeHeight - PLAYER.eyeHeight) * this.crouchT;
+    // passando por cima de um obstáculo o corpo encolhe (olho mais baixo no meio do movimento)
+    return PLAYER.eyeHeight + (PLAYER.crouchEyeHeight - PLAYER.eyeHeight) * this.crouchT - this.vault.cameraDip * 0.3;
   }
 
   /** Pendurado ou escalando uma quina (null = movimento normal). */
@@ -248,6 +327,10 @@ export class PlayerController {
       this.updateLedge(dt, input);
       return;
     }
+    if (this.vault.active) {
+      this.updateVault(dt);
+      return;
+    }
     const f = Number(input.isDown(KEYS.forward)) - Number(input.isDown(KEYS.back));
     const r = Number(input.isDown(KEYS.right)) - Number(input.isDown(KEYS.left));
 
@@ -256,17 +339,41 @@ export class PlayerController {
     this.wish.set(-sin * f + cos * r, 0, -cos * f - sin * r);
     if (this.wish.lengthSq() > 0) this.wish.normalize();
 
-    const wantsSprint = input.isDown(KEYS.sprint) || input.isDown('ShiftRight');
-    this.updateCrouch(dt, input, wantsSprint && f > 0);
-    this.sprinting = opts.canSprint && !opts.aiming && !this.crouched && wantsSprint && f > 0 && (this.onGround || this.sprinting);
+    // Espaço de frente para um obstáculo baixo (até 60% da altura): passa por cima
+    if (this.onGround && this.slideTime <= 0 && input.wasPressed(KEYS.jump)) {
+      const dir = this.wish.lengthSq() > 0 ? this.wish : this.tmpDir.set(-sin, 0, -cos);
+      if (this.vault.tryStart(this.position, dir)) {
+        this.vaultSpeed = Math.max(PLAYER.walkSpeed * 0.8, Math.hypot(this.velocity.x, this.velocity.z));
+        this.crouched = false;
+        this.sprinting = false;
+        this.onGround = false;
+        this.velocity.set(0, 0, 0);
+        return;
+      }
+    }
 
-    let base: number = this.sprinting ? PLAYER.sprintSpeed : opts.aiming ? PLAYER.adsSpeed : PLAYER.walkSpeed;
-    if (this.crouched) base = Math.min(base, PLAYER.crouchSpeed);
-    const speed = base * this.speedMultiplier;
-    this.speedCap = speed;
-    const accel = this.onGround ? PLAYER.groundAccel : PLAYER.airAccel;
-    this.velocity.x = damp(this.velocity.x, this.wish.x * speed, accel, dt);
-    this.velocity.z = damp(this.velocity.z, this.wish.z * speed, accel, dt);
+    const wantsSprint = input.isDown(KEYS.sprint) || input.isDown('ShiftRight');
+    if (this.slideLock && !(wantsSprint && f > 0)) this.slideLock = false;
+    this.slideStarted = false;
+
+    // correndo + C: desliza para a frente e termina agachado
+    if (this.sprinting && this.onGround && this.slideTime <= 0 && input.wasPressed(KEYS.crouch)) this.startSlide();
+    if (this.slideTime > 0) {
+      this.updateSlide(dt, input);
+    } else {
+      this.updateCrouch(dt, input, wantsSprint && f > 0 && !this.slideLock);
+      this.sprinting = opts.canSprint && !opts.aiming && !this.crouched && !this.slideLock && wantsSprint && f > 0 && (this.onGround || this.sprinting);
+
+      let base: number = this.sprinting ? PLAYER.sprintSpeed : opts.aiming ? PLAYER.adsSpeed : PLAYER.walkSpeed;
+      if (this.crouched) base = Math.min(base, PLAYER.crouchSpeed);
+      const speed = base * this.speedMultiplier;
+      this.speedCap = speed;
+      const accel = this.onGround ? PLAYER.groundAccel : PLAYER.airAccel;
+      this.velocity.x = damp(this.velocity.x, this.wish.x * speed, accel, dt);
+      this.velocity.z = damp(this.velocity.z, this.wish.z * speed, accel, dt);
+    }
+    this.slideT = damp(this.slideT, this.slideTime > 0 ? 1 : 0, this.slideTime > 0 ? 14 : 7, dt);
+    const speed = this.speedCap;
 
     if (this.onGround && input.wasPressed(KEYS.jump) && !this.crouched) {
       this.velocity.y = PLAYER.jumpVelocity;
@@ -276,8 +383,14 @@ export class PlayerController {
 
     // o que o jogador QUER fazer (teclas): mesmo travado na caixa, continua empurrando
     this.pushVelocity.set(this.wish.x * speed, 0, this.wish.z * speed);
-    if (moveAndCollide(this.body, 'x', this.velocity.x * dt, this.colliders)) this.velocity.x = 0;
-    if (moveAndCollide(this.body, 'z', this.velocity.z * dt, this.colliders)) this.velocity.z = 0;
+    if (moveAndCollide(this.body, 'x', this.velocity.x * dt, this.colliders)) {
+      this.velocity.x = 0;
+      if (this.slideTime > 0) this.slideSpeed *= 0.4; // bateu de lado/de frente: freia
+    }
+    if (moveAndCollide(this.body, 'z', this.velocity.z * dt, this.colliders)) {
+      this.velocity.z = 0;
+      if (this.slideTime > 0) this.slideSpeed *= 0.4;
+    }
 
     const wasGrounded = this.onGround;
     const fallSpeed = this.velocity.y;
@@ -300,6 +413,25 @@ export class PlayerController {
       this.crouched = false;
       this.sprinting = false;
     }
+  }
+
+  private readonly tmpDir = new THREE.Vector3();
+
+  /** Durante o salto sobre o obstáculo: movimento roteirizado, sem colisão. */
+  private updateVault(dt: number): void {
+    this.sprinting = false;
+    this.landingImpact = 0;
+    if (this.vault.update(dt, this.position)) {
+      // sai andando na mesma direção
+      this.velocity.set(this.vault.dir.x * this.vaultSpeed, 0, this.vault.dir.z * this.vaultSpeed);
+      this.onGround = true;
+      this.landingImpact = 2.5;
+    }
+  }
+
+  /** Passando por cima de um obstáculo? */
+  get vaulting(): boolean {
+    return this.vault.active;
   }
 
   /**
@@ -344,6 +476,11 @@ export class PlayerController {
     return (this.strafeSpeed / Math.max(this.speedCap, 0.1)) * PLAYER.walkSpeed;
   }
 
+  /** Velocidade para a frente relativa à câmera em m/s (+ = frente, − = ré). */
+  get forwardSpeed(): number {
+    return -(this.velocity.x * Math.sin(this.yaw) + this.velocity.z * Math.cos(this.yaw));
+  }
+
   /** -1 (esquerda) .. 1 (direita). */
   get leanAmount(): number {
     return this.lean;
@@ -359,9 +496,9 @@ export class PlayerController {
     const s = this.shakeAmount * 0.03;
     const t = this.shakeTime;
     this.camera.rotation.set(
-      this.pitch + this.recoilKick + this.aimOffsetPitch - this.ledge.cameraDip + Math.sin(t * 47) * s,
+      this.pitch + this.recoilKick + this.aimOffsetPitch - this.ledge.cameraDip - this.vault.cameraDip * 0.06 + Math.sin(t * 47) * s,
       this.yaw + this.yawKick + this.aimOffsetYaw + Math.sin(t * 39 + 1) * s,
-      -this.lean * LEAN.roll + Math.sin(t * 31 + 2) * s,
+      -this.lean * LEAN.roll + this.slideT * 0.07 + this.vault.cameraDip * 0.05 + Math.sin(t * 31 + 2) * s,
       'YXZ',
     );
   }

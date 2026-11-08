@@ -13,6 +13,20 @@ export class ModelBuilder {
   private readonly parts = new Map<PartName, THREE.Object3D>();
   private readonly anchors = new Map<AnchorName, THREE.Object3D>();
   private readonly pal: Palette = getPalette();
+  /** Blocos criados agora são mira de ferro (somem quando a arma recebe uma mira). */
+  private ironMode = false;
+
+  /** Executa `fn` marcando os blocos como mira de ferro (alça/massa). */
+  irons<T>(fn: () => T): T {
+    // aninhável: `ironSights()` dentro de outro bloco não pode desligar a marcação do bloco de fora
+    const prev = this.ironMode;
+    this.ironMode = true;
+    try {
+      return fn();
+    } finally {
+      this.ironMode = prev;
+    }
+  }
 
   constructor(private readonly id: string) {
     this.root.name = id;
@@ -24,6 +38,7 @@ export class ModelBuilder {
     mesh.scale.set(size[0], size[1], size[2]);
     mesh.position.set(pos[0], pos[1], pos[2]);
     if (rot) mesh.rotation.set(rot[0], rot[1], rot[2]);
+    if (this.ironMode) mesh.userData.iron = true;
     parent.add(mesh);
     return mesh;
   }

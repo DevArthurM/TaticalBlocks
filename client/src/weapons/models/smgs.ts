@@ -16,10 +16,12 @@ function triggerGroup(b: ModelBuilder) {
 }
 
 function ironSights(b: ModelBuilder, y: number, rearZ: number, frontZ: number) {
-  b.box('dark', [0.006, 0.012, 0.008], [-0.009, y + 0.006, rearZ]);
-  b.box('dark', [0.006, 0.012, 0.008], [0.009, y + 0.006, rearZ]);
-  b.box('dark', [0.006, 0.014, 0.008], [0, y + 0.007, frontZ]);
-  b.box('sight', [0.003, 0.003, 0.002], [0, y + 0.013, frontZ + 0.005]);
+  b.irons(() => {
+    b.box('dark', [0.006, 0.012, 0.008], [-0.009, y + 0.006, rearZ]);
+    b.box('dark', [0.006, 0.012, 0.008], [0.009, y + 0.006, rearZ]);
+    b.box('dark', [0.006, 0.014, 0.008], [0, y + 0.007, frontZ]);
+    b.box('sight', [0.003, 0.003, 0.002], [0, y + 0.013, frontZ + 0.005]);
+  });
   b.anchor('sight', [0, y + 0.012, rearZ]);
 }
 
@@ -169,30 +171,42 @@ export function buildUMP(): WeaponModel {
 
 export function buildP90(): WeaponModel {
   const b = new ModelBuilder('p90');
-  // corpo bullpup verde com buraco do polegar
-  b.box('olive', [0.056, 0.07, 0.42], [0, 0.03, 0.02]);
-  b.box('olive', [0.056, 0.05, 0.12], [0, -0.04, 0.17]); // coronha baixa
-  b.box('oliveDark', [0.05, 0.03, 0.08], [0, -0.035, -0.12]); // guarda frontal
-  b.box('oliveDark', [0.058, 0.012, 0.03], [0, -0.06, -0.16]);
-  b.rod('dark', 0.018, 0.06, [0, 0.03, -0.21]);
-  b.box('dark', [0.006, 0.018, 0.006], [0, -0.01, -0.02]);
-  b.box('grip', [0.032, 0.07, 0.04], [0, -0.035, 0.03], b.root, [-0.2, 0, 0]);
-  // carregador superior translúcido
-  const mag = b.part('mag', [0, 0.072, 0.03]);
-  b.box('gun', [0.05, 0.022, 0.3], [0, 0, 0], mag);
-  b.box('brass', [0.03, 0.01, 0.26], [0, 0.012, 0], mag);
+  // ── corpo bullpup: parte de cima lisa, frente arredondada ──
+  b.box('olive', [0.056, 0.06, 0.4], [0, 0.035, 0.02]); // receptor
+  b.box('olive', [0.05, 0.03, 0.04], [0, 0.04, -0.2]); // nariz
+  b.box('olive', [0.044, 0.02, 0.02], [0, 0.035, -0.225]);
+  b.rod('dark', 0.02, 0.04, [0, 0.035, -0.245]); // cano curto
+  b.rod('black', 0.026, 0.022, [0, 0.035, -0.268]); // quebra-chamas
+  b.box('oliveDark', [0.058, 0.006, 0.36], [0, 0.006, 0.02]); // junção das metades
+  // ── frente: alça para o polegar da mão de apoio (laço fechado) ──
+  b.box('oliveDark', [0.05, 0.075, 0.03], [0, -0.03, -0.17]); // barra da frente
+  b.box('oliveDark', [0.046, 0.016, 0.1], [0, -0.06, -0.115]); // fundo do laço
+  // ── empunhadura com buraco do polegar ──
+  triggerGroup(b);
+  const grip = b.group([0, 0.0, 0.03], b.root, [-0.12, 0, 0]);
+  b.box('black', [0.034, 0.09, 0.042], [0, -0.045, 0], grip);
+  b.box('oliveDark', [0.05, 0.016, 0.24], [0, -0.09, 0.13]); // base que liga a empunhadura à coronha
+  b.box('olive', [0.056, 0.1, 0.08], [0, -0.035, 0.2]); // coronha (traseira cheia)
+  b.box('black', [0.058, 0.1, 0.012], [0, -0.035, 0.244]); // soleira
+  b.box('olive', [0.05, 0.02, 0.06], [0, -0.005, 0.12]); // teto do buraco do polegar
+  // ── carregador translúcido em cima, com os cartuchos deitados à vista ──
+  const mag = b.part('mag', [0, 0.072, 0.02]);
+  b.box('smoke', [0.05, 0.024, 0.3], [0, 0, 0], mag);
+  b.box('brass', [0.032, 0.008, 0.27], [0, 0.002, 0], mag);
+  b.box('black', [0.052, 0.006, 0.3], [0, -0.013, 0], mag); // trilho do carregador
+  b.box('black', [0.052, 0.026, 0.02], [0, 0.0, 0.16], mag); // trava traseira
   b.anchor('mag', [-0.025, 0.0, -0.05], mag);
-  // mira reflex sobre trilho
-  b.box('black', [0.03, 0.03, 0.06], [0, 0.11, -0.06]);
-  b.box('lens', [0.024, 0.022, 0.002], [0, 0.112, -0.03]);
-  b.box('redDot', [0.003, 0.003, 0.001], [0, 0.112, -0.09]);
-  b.anchor('sight', [0, 0.112, -0.02]);
-  const ch = b.part('charging', [-0.03, 0.03, -0.1]);
+  // ── trilho superior elevado com alça e massa (sem mira padrão) ──
+  b.box('black', [0.014, 0.022, 0.02], [0, 0.093, -0.17]); // pé dianteiro
+  b.box('black', [0.014, 0.022, 0.02], [0, 0.093, -0.02]); // pé traseiro
+  b.box('black', [0.024, 0.008, 0.17], [0, 0.104, -0.095]); // trilho
+  ironSights(b, 0.108, -0.02, -0.17);
+  const ch = b.part('charging', [-0.03, 0.03, -0.12]);
   b.box('dark', [0.01, 0.012, 0.016], [0, 0, 0], ch);
   b.anchor('charging', [-0.006, 0, 0], ch);
-  b.anchor('support', [-0.02, -0.04, -0.13]);
-  b.anchor('muzzle', [0, 0.03, -0.24]);
-  b.anchor('eject', [0, -0.05, 0.1]);
-  b.anchor('grip', [0.006, -0.03, 0.04]);
-  return b.build(view('smg', { hipPos: [0.11, -0.11, -0.31] }));
+  b.anchor('support', [-0.02, -0.035, -0.15]);
+  b.anchor('muzzle', [0, 0.035, -0.28]);
+  b.anchor('eject', [0, -0.06, 0.1]);
+  b.anchor('grip', [0.006, -0.03, 0.035]);
+  return b.build(view('smg', { hipPos: [0.1, -0.115, -0.255] }));
 }

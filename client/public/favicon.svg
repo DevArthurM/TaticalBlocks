@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">
+  <defs>
+    <linearGradient id="gray" x1="0" y1="0" x2="0" y2="140" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f4f4f1"/><stop offset="1" stop-color="#a5a6a2"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="140" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#a6d44e"/><stop offset="1" stop-color="#4f7f22"/></linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="#12151b"/>
+  <g transform="translate(8.96 19.59) scale(0.1772)">
+    <g fill="url(#gray)"><rect x="0.0" y="0.0" width="120.0" height="20"/><rect x="0.0" y="20.0" width="120.0" height="20"/><rect x="40.0" y="40.0" width="40.0" height="20"/><rect x="40.0" y="60.0" width="40.0" height="20"/><rect x="40.0" y="80.0" width="40.0" height="20"/><rect x="40.0" y="100.0" width="40.0" height="20"/><rect x="40.0" y="120.0" width="40.0" height="20"/></g>
+    <g fill="url(#green)"><rect x="140.0" y="0.0" width="100.0" height="20"/><rect x="140.0" y="20.0" width="40.0" height="20"/><rect x="220.0" y="20.0" width="40.0" height="20"/><rect x="140.0" y="40.0" width="40.0" height="20"/><rect x="220.0" y="40.0" width="40.0" height="20"/><rect x="140.0" y="60.0" width="100.0" height="20"/><rect x="140.0" y="80.0" width="40.0" height="20"/><rect x="220.0" y="80.0" width="40.0" height="20"/><rect x="140.0" y="100.0" width="40.0" height="20"/><rect x="220.0" y="100.0" width="40.0" height="20"/><rect x="140.0" y="120.0" width="100.0" height="20"/></g>
+  </g>
+</svg>

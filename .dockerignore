@@ -1,0 +1,14 @@
+# não vão para o contexto de build da imagem
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/*.log
+.git
+.gitignore
+.DS_Store
+.claude
+# imagens de referência da raiz (o jogo usa só client/public)
+/*.png
+Dockerfile
+docker-compose.yml
+.dockerignore

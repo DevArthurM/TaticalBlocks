@@ -82,7 +82,9 @@ export function buildAA12(): WeaponModel {
   const ch = b.part('charging', [-0.032, 0.06, -0.15]);
   b.box('dark', [0.014, 0.012, 0.016], [-0.004, 0, 0], ch);
   b.anchor('charging', [-0.012, 0, 0], ch);
-  redDot(b, 0.098, -0.06);
+  // mira elevada numa base: a carcaça alta da AA-12 não tampa mais a visada
+  b.box('black', [0.024, 0.026, 0.06], [0, 0.108, -0.06]);
+  redDot(b, 0.121, -0.06);
   b.anchor('muzzle', [0, 0.03, -0.45]);
   b.anchor('eject', [0.032, 0.05, -0.06]);
   b.anchor('grip', [0.006, -0.042, 0.08]);

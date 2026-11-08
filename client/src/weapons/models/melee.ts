@@ -12,8 +12,14 @@ export function buildKnife(): WeaponModel {
   b.box('steel', [0.034, 0.012, 0.06], [0, 0.05, 0]); // guarda
   b.box('blade', [0.008, 0.16, 0.034], [0, 0.135, 0.002]);
   b.box('steel', [0.009, 0.15, 0.008], [0, 0.13, 0.017]); // dorso
-  b.box('blade', [0.008, 0.05, 0.024], [0, 0.225, -0.006], b.root, [0.45, 0, 0]);
-  b.anchor('muzzle', [0, 0.24, 0]);
+  // ponta: o fio sobe em curva até o dorso reto (degraus finos, afinando por igual)
+  const spine = 0.019;
+  let y = 0.215;
+  for (const [w, h] of [[0.03, 0.01], [0.025, 0.009], [0.02, 0.008], [0.015, 0.007], [0.01, 0.006], [0.006, 0.005], [0.003, 0.004]]) {
+    b.box('blade', [0.008, h, w], [0, y + h / 2, spine - w / 2]);
+    y += h;
+  }
+  b.anchor('muzzle', [0, y, spine - 0.002]);
   b.anchor('grip', [0, -0.01, 0]);
   return b.build(view('melee', { hipPos: [0.14, -0.16, -0.3], hipRot: [-1.15, 0.2, 0.15] }));
 }

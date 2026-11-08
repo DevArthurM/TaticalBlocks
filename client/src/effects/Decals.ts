@@ -51,6 +51,11 @@ export class Decals {
     for (const d of this.items) if (d.visible && d.position.distanceTo(point) < radius) d.visible = false;
   }
 
+  /** Some com todas as marcas (mapa restaurado). */
+  clearAll(): void {
+    for (const d of this.items) d.visible = false;
+  }
+
   /** Mancha de sangue no chão. */
   placeBlood(point: THREE.Vector3, size: number): void {
     const d = this.items[this.next];

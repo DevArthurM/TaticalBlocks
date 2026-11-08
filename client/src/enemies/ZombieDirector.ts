@@ -39,7 +39,7 @@ interface Gib {
 
 export interface DirectorHooks {
   /** Zumbi acertou o jogador. */
-  onPlayerHit(damage: number): void;
+  onPlayerHit(damage: number, from: THREE.Vector3): void;
   /** Nova onda começou. */
   onWave(wave: number, count: number): void;
 }
@@ -132,19 +132,23 @@ export class ZombieDirector {
     this.time += dt;
     this.updateWaves(dt);
 
+    let attacker: Zombie | null = null;
     const ctx = {
       dt,
       time: this.time,
       target: this.player.position,
       colliders: this.colliders,
       onAttack: (d: number) => {
-        this.hooks.onPlayerHit(d);
+        this.hooks.onPlayerHit(d, attacker?.position ?? this.player.position);
         this.audio.play('zombieAttack', 0.7);
       },
     };
     const living = this.zombies.filter((z) => !z.dead);
     for (const z of living) this.updateBreach(z);
-    for (const z of living) z.update(ctx);
+    for (const z of living) {
+      attacker = z;
+      z.update(ctx);
+    }
     const grounded = living.filter((z) => !z.vaulting);
     for (let i = 0; i < grounded.length; i++) for (let j = i + 1; j < grounded.length; j++) grounded[i].separate(grounded[j]);
 

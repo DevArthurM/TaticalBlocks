@@ -43,6 +43,8 @@ export default defineConfig({
     allowedHosts: ['.ngrok-free.app', '.ngrok.app'],
     proxy: {
       '/api': 'http://localhost:3000',
+      // modo online: WebSocket do Nest na mesma porta da API
+      '/server': { target: 'ws://localhost:3000', ws: true },
     },
   },
 });

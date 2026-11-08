@@ -96,6 +96,7 @@ export const KEYS = {
   crouch: 'KeyC',
   inspect: 'KeyV',
   repair: 'KeyF',
+  customize: 'KeyT',
   loadout: 'KeyB',
   fire: 'Mouse0',
   aim: 'Mouse2',

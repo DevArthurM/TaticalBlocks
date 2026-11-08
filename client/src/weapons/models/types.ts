@@ -36,7 +36,9 @@ export type AnchorName =
   | 'cover'
   | 'rocket'
   | 'shell'
-  | 'pin';
+  | 'pin'
+  | 'laser'
+  | 'light';
 
 export type V3 = readonly [number, number, number];
 

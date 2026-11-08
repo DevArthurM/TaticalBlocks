@@ -1,0 +1,65 @@
+/* Editor de acessórios (T): linhas da arma até quadrados; opções abrem em fileira */
+.att-editor { position: fixed; inset: 0; z-index: 30; pointer-events: none; color: var(--hud-fg); font-family: 'Rajdhani', system-ui, sans-serif; }
+.att-editor.hidden { display: none; }
+
+.att-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.att-line { stroke: rgba(244, 246, 248, 0.75); stroke-width: 1.5; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6)); }
+.att-dot { fill: var(--hud-accent); stroke: rgba(0, 0, 0, 0.5); stroke-width: 1; }
+
+/* quadrado de cada encaixe (centro em translate(x, y)) */
+.att-box { position: absolute; left: 0; top: 0; width: 76px; height: 76px; margin: -38px 0 0 -38px; animation: att-pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
+@keyframes att-pop { from { opacity: 0; scale: 0.4; } to { opacity: 1; scale: 1; } }
+.att-square {
+  all: unset; box-sizing: border-box; pointer-events: auto; cursor: pointer; display: grid; place-items: center;
+  width: 76px; height: 76px; border-radius: 8px; overflow: hidden;
+  background: rgba(12, 15, 21, 0.82); border: 2px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.att-square img { width: 100%; height: 100%; object-fit: contain; transform: scale(1.25); pointer-events: none; image-rendering: pixelated; }
+.att-square:hover, .att-box.picking .att-square { border-color: #fff; transform: scale(1.06); }
+.att-box.filled .att-square { border-color: var(--hud-accent); box-shadow: 0 0 0 3px rgba(200, 245, 96, 0.18), 0 6px 18px rgba(0, 0, 0, 0.4); }
+.att-plus { font-size: 30px; font-weight: 500; color: rgba(244, 246, 248, 0.5); }
+.att-label {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 4px; white-space: nowrap; text-align: center;
+  font-size: 13px; font-weight: 700; text-shadow: var(--hud-shadow); pointer-events: none;
+}
+.att-label small { display: block; font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--hud-dim); }
+.att-box.filled .att-label { color: var(--hud-accent); }
+
+/* fileira de opções saindo do quadrado (igual aos arremessáveis do arsenal) */
+/* largura própria: dentro do quadrado (76 px) os círculos se espremiam e se sobrepunham */
+.att-picker { position: absolute; top: 50%; display: flex; gap: 10px; width: max-content; transform: translateY(-50%); pointer-events: auto; }
+.att-box.open-left .att-picker { right: calc(100% + 12px); flex-direction: row-reverse; }
+.att-box.open-right .att-picker { left: calc(100% + 12px); }
+.att-opt {
+  all: unset; box-sizing: border-box; position: relative; flex: none; cursor: pointer; width: 62px; height: 62px; border-radius: 50%;
+  display: grid; place-items: center; overflow: visible;
+  background: rgba(12, 15, 21, 0.85); box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25), 0 4px 12px rgba(0, 0, 0, 0.35);
+  animation: att-opt-in 0.24s cubic-bezier(0.2, 0.9, 0.3, 1.25) both; animation-delay: calc(var(--i) * 40ms);
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+@keyframes att-opt-in { from { opacity: 0; scale: 0.3; } to { opacity: 1; scale: 1; } }
+.att-opt img { width: 100%; height: 100%; border-radius: 50%; object-fit: contain; transform: scale(1.2); pointer-events: none; image-rendering: pixelated; }
+.att-opt:hover { transform: scale(1.14); box-shadow: inset 0 0 0 2px #fff, 0 0 16px rgba(255, 255, 255, 0.25); }
+.att-opt.selected { box-shadow: inset 0 0 0 3px var(--hud-accent), 0 0 14px rgba(200, 245, 96, 0.5); background: rgba(200, 245, 96, 0.14); }
+.att-opt-name {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 3px; white-space: nowrap;
+  font-size: 11px; font-weight: 700; color: var(--hud-dim); text-shadow: var(--hud-shadow); pointer-events: none;
+}
+.att-opt:hover .att-opt-name { color: var(--hud-fg); }
+.att-opt.selected .att-opt-name { color: var(--hud-accent); }
+.att-none { width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(244, 246, 248, 0.45); position: relative; }
+.att-none::after { content: ''; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; background: rgba(244, 246, 248, 0.45); transform: translateX(-50%) rotate(45deg); }
+
+/* legenda embaixo: nome da arma, atributos e descrição da opção sob o mouse */
+.att-info {
+  position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); max-width: min(720px, 92vw);
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 4px 14px;
+  padding: 8px 16px; border-radius: 8px; background: rgba(12, 15, 21, 0.72); text-shadow: var(--hud-shadow);
+}
+.att-info b { font-size: 20px; letter-spacing: 0.06em; }
+.att-info span { font-size: 14px; color: var(--hud-dim); }
+.att-info em { font-style: normal; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; color: var(--hud-accent); }
+.att-stats { display: inline-flex; gap: 6px; }
+.att-stats i { font-style: normal; font-size: 12px; font-weight: 700; color: var(--hud-fg); padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); }

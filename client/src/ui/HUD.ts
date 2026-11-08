@@ -7,12 +7,12 @@ export interface HudState {
   aiming: boolean;
   sprinting: boolean;
   scoped: boolean;
-  /** 0..1 — opacidade do ponto central ao mirar inclinado (andando de lado). */
-  adsDot: number;
   /** 0..1 — túnel de foco ao mirar (vinheta). */
   tunnel: number;
   /** 0..1 — vermelho nas bordas (dano recente + vida baixa). */
   hurt: number;
+  /** Escopeta: mira em círculo. */
+  round: boolean;
 }
 
 export interface InspectView {
@@ -22,9 +22,26 @@ export interface InspectView {
   reserve: number;
   /** 0..1 da inspeção. */
   t: number;
+  /** Acessórios equipados (nomes). */
+  attachments: string[];
   /** Posição na tela (px) perto da arma. */
   x: number;
   y: number;
+}
+
+/** Indicadores de direção de dano simultâneos. */
+const DAMAGE_SLOTS = 4;
+/** Segundos que a meia-lua fica visível (some nos últimos ~40%). */
+const DAMAGE_LIFE = 1.6;
+/** Meia-lua: arco grosso no topo de um círculo de raio 100 (centro 110,110), afinando nas pontas. */
+const DAMAGE_ARC =
+  'M 46.6 46.6 A 90 90 0 0 1 173.4 46.6 L 167.4 54.2 A 80 80 0 0 0 52.6 54.2 Z'.replace(/\s+/g, ' ');
+
+interface DamageMark {
+  el: HTMLDivElement;
+  x: number;
+  z: number;
+  life: number;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, parent?: HTMLElement): HTMLElementTagNameMap[K] => {
@@ -42,11 +59,16 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, pa
 export class HUD {
   /** Clique no botão "Configurações" da tela de pausa. */
   onOpenSettings: () => void = () => {};
-  /** Troca de mapa pela tela de pausa. */
-  onSelectMap: (mode: string) => void = () => {};
+  /** Botão "Menu principal". */
+  onMainMenu: () => void = () => {};
+  /** Botão "Sair da partida". */
+  onExitMatch: () => void = () => {};
 
-  setMapChoice(mode: string): void {
-    this.overlay.querySelectorAll<HTMLButtonElement>('[data-map]').forEach((b) => b.classList.toggle('on', b.dataset.map === mode));
+  /** Modo online: dica do placar no painel de pausa. */
+  setOnlineMode(online: boolean): void {
+    this.overlay.querySelector<HTMLElement>('.pause-hint')!.textContent = online
+      ? 'Clique no jogo para continuar · segure Tab para ver o placar'
+      : 'Clique no jogo para continuar';
   }
 
   private readonly root: HTMLDivElement;
@@ -56,7 +78,6 @@ export class HUD {
   private readonly scope: HTMLDivElement;
   private readonly flash: HTMLDivElement;
   private readonly prompt: HTMLDivElement;
-  private readonly adsDot: HTMLDivElement;
   private readonly tunnel: HTMLDivElement;
   private readonly hurtEl: HTMLDivElement;
   private readonly banner: HTMLDivElement;
@@ -65,10 +86,12 @@ export class HUD {
   private readonly inspectImg: HTMLImageElement;
   private readonly inspectCount: HTMLElement;
   private readonly inspectReserve: HTMLElement;
+  private readonly inspectAtt: HTMLUListElement;
   private promptText = '';
   private inspectGif = '';
   private inspectKey = '';
   private blind = 0;
+  private readonly damageMarks: DamageMark[] = [];
 
   constructor(container: HTMLElement) {
     this.root = el('div', 'hud', container);
@@ -82,8 +105,13 @@ export class HUD {
     this.crosshair = el('div', 'crosshair', this.root);
     for (const dir of ['top', 'bottom', 'left', 'right']) el('span', `ch ch-${dir}`, this.crosshair);
     el('span', 'ch-dot', this.crosshair);
+    el('span', 'ch-ring', this.crosshair);
 
-    this.adsDot = el('div', 'ads-dot', this.root);
+    for (let i = 0; i < DAMAGE_SLOTS; i++) {
+      const mark = el('div', 'dmg-dir', this.root);
+      mark.innerHTML = `<svg viewBox="0 0 220 220"><path d="${DAMAGE_ARC}"/></svg>`;
+      this.damageMarks.push({ el: mark, x: 0, z: 0, life: 0 });
+    }
     this.prompt = el('div', 'prompt', this.root);
 
     this.inspect = el('div', 'inspect', this.root);
@@ -94,49 +122,34 @@ export class HUD {
     const num = el('div', 'inspect-num', bob);
     this.inspectCount = el('b', '', num);
     this.inspectReserve = el('span', '', num);
+    this.inspectAtt = el('ul', 'inspect-att', bob);
 
+    // pausa (Esc): painel lateral à esquerda; o jogo continua visível à direita (clicar nele retoma)
     this.overlay = el('div', 'overlay', this.root);
     this.overlay.innerHTML = `
-      <div class="overlay-card">
-        <h1>CAMPO DE TESTES</h1>
-        <p class="overlay-sub">Clique para jogar</p>
-        <ul class="controls">
-          <li><kbd>W A S D</kbd> mover</li>
-          <li><kbd>Shift</kbd> correr</li>
-          <li><kbd>Espaço</kbd> pular</li>
-          <li><kbd>Mouse esq.</kbd> atirar / golpear / arremessar</li>
-          <li><kbd>Mouse dir.</kbd> mirar</li>
-          <li><kbd>R</kbd> recarregar</li>
-          <li><kbd>V</kbd> inspecionar (munição)</li>
-          <li><kbd>F</kbd> (segurar) pregar tábuas</li>
-          <li><kbd>1 2 3 4</kbd> trocar arma</li>
-          <li><kbd>Roda / X</kbd> próxima / última</li>
-          <li><kbd>Q / E</kbd> inclinar</li>
-          <li><kbd>C</kbd> agachar</li>
-          <li><kbd>Espaço</kbd> (segurar) agarrar quina</li>
-          <li><kbd>B</kbd> arsenal</li>
-          <li><kbd>Esc</kbd> pausar</li>
-        </ul>
-        <p class="overlay-note">Balas infinitas nesta fase de teste</p>
-        <p class="overlay-status"></p>
-        <div class="overlay-maps">
-          <span>Mapa</span>
-          <button type="button" data-map="voxel">Pátio Voxel</button>
-          <button type="button" data-map="hospital">Hospital</button>
+      <aside class="pause-panel">
+        <div class="pause-name"><small>Jogador</small><b></b></div>
+        <nav class="pause-actions">
+          <button type="button" data-act="main">Menu Principal</button>
+          <button type="button" data-act="settings">Configurações</button>
+        </nav>
+        <div class="pause-foot">
+          <p class="pause-hint">Clique no jogo para continuar</p>
+          <p class="overlay-status"></p>
+          <button type="button" class="pause-exit" data-act="exit">Sair da partida</button>
         </div>
-        <div class="overlay-actions"><button type="button" class="overlay-btn" data-open-settings>⚙ Configurações</button></div>
-      </div>`;
+      </aside>`;
     this.status = this.overlay.querySelector('.overlay-status')!;
-    this.overlay.querySelectorAll<HTMLButtonElement>('[data-map]').forEach((btn) =>
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!btn.classList.contains('on')) this.onSelectMap(btn.dataset.map!);
-      }),
-    );
-    this.overlay.querySelector('[data-open-settings]')!.addEventListener('click', (e) => {
+    const panel = this.overlay.querySelector<HTMLElement>('.pause-panel')!;
+    // cliques no painel não retomam o jogo (só fora dele)
+    panel.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.onOpenSettings();
+      const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset.act;
+      if (act === 'main') this.onMainMenu();
+      else if (act === 'settings') this.onOpenSettings();
+      else if (act === 'exit') this.onExitMatch();
     });
+    panel.addEventListener('mousedown', (e) => e.stopPropagation());
   }
 
   /** Aviso contextual no centro-baixo da tela (null esconde). */
@@ -149,6 +162,15 @@ export class HUD {
   }
 
   setPaused(paused: boolean): void {
+    if (paused) {
+      let name = '';
+      try {
+        name = localStorage.getItem('fps.name') ?? '';
+      } catch {
+        /* sem armazenamento */
+      }
+      this.overlay.querySelector('.pause-name b')!.textContent = name || 'Soldado';
+    }
     this.overlay.classList.toggle('hidden', !paused);
   }
 
@@ -156,6 +178,11 @@ export class HUD {
   setStatus(mapName: string, source: DataSource): void {
     const label = source === 'server' ? 'servidor online' : 'offline — dados locais';
     this.status.innerHTML = `<b>${mapName}</b> · <span class="${source}">${label}</span>`;
+  }
+
+  /** Personalizando a arma: esconde a mira e efeitos de mira. */
+  setCustomizing(on: boolean): void {
+    this.root.classList.toggle('customizing', on);
   }
 
   /** Mensagem temporária no lugar do status (ex.: carregando). */
@@ -169,6 +196,35 @@ export class HUD {
     this.bannerTimer = 3;
   }
 
+  /**
+   * Levou dano vindo de `from` (posição no mundo): meia-lua vermelha em volta da
+   * mira apontando para lá. Segue girando conforme o jogador vira.
+   */
+  damageFrom(x: number, z: number): void {
+    // reaproveita a marca da mesma direção (rajada do mesmo atirador) ou a mais antiga
+    let slot = this.damageMarks.find((m) => m.life > 0 && Math.hypot(m.x - x, m.z - z) < 1.5);
+    slot ??= this.damageMarks.reduce((a, b) => (b.life < a.life ? b : a));
+    slot.x = x;
+    slot.z = z;
+    slot.life = DAMAGE_LIFE;
+  }
+
+  /** Atualiza as meias-luas para a posição/direção atual da câmera. */
+  updateDamageDir(camX: number, camZ: number, yaw: number, dt: number): void {
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    for (const m of this.damageMarks) {
+      if (m.life <= 0) continue;
+      m.life = Math.max(0, m.life - dt);
+      const dx = m.x - camX;
+      const dz = m.z - camZ;
+      // ângulo na tela: 0 = à frente (topo), positivo = à direita (sentido horário)
+      const angle = Math.atan2(dx * -fz + dz * fx, dx * fx + dz * fz);
+      m.el.style.transform = `rotate(${angle.toFixed(3)}rad)`;
+      m.el.style.opacity = Math.min(1, m.life / (DAMAGE_LIFE * 0.4)).toFixed(3);
+    }
+  }
+
   /** Granada de atordoamento. */
   addBlind(amount: number): void {
     this.blind = Math.min(1.6, this.blind + amount * 1.6);
@@ -180,12 +236,10 @@ export class HUD {
 
     this.scope.classList.toggle('on', s.scoped);
     this.crosshair.style.setProperty('--gap', `${Math.round(s.crosshairGap)}px`);
-    // mira e ponto de ADS seguem o mesmo desvio do braço (recuo + mola de tensão)
-    const offset = `translate(${s.aimOffset[0].toFixed(1)}px, ${s.aimOffset[1].toFixed(1)}px)`;
-    this.crosshair.style.transform = offset;
-    this.adsDot.style.transform = offset;
+    // a mira segue o desvio do braço (recuo + mola de tensão)
+    this.crosshair.style.transform = `translate(${s.aimOffset[0].toFixed(1)}px, ${s.aimOffset[1].toFixed(1)}px)`;
     this.crosshair.classList.toggle('hidden', s.aiming || s.sprinting || s.scoped);
-    this.adsDot.style.opacity = s.adsDot.toFixed(3);
+    this.crosshair.classList.toggle('round', s.round);
     this.tunnel.style.setProperty('--f', s.tunnel.toFixed(3));
     this.hurtEl.style.opacity = s.hurt.toFixed(3);
     this.bannerTimer -= dt;
@@ -201,9 +255,16 @@ export class HUD {
       this.inspectGif = v.gifId;
       this.inspectImg.src = `/weapons/gifs/${v.gifId}.gif`;
     }
-    const key = `${v.count}|${v.reserve}`;
+    const key = `${v.count}|${v.reserve}|${v.attachments.join(',')}`;
     if (key !== this.inspectKey) {
       this.inspectKey = key;
+      this.inspectAtt.replaceChildren(
+        ...v.attachments.map((name) => {
+          const li = document.createElement('li');
+          li.textContent = name;
+          return li;
+        }),
+      );
       this.inspectCount.textContent = String(v.count);
       this.inspectReserve.textContent = Number.isNaN(v.reserve) ? '' : `/ ${Number.isFinite(v.reserve) ? v.reserve : '∞'}`;
     }

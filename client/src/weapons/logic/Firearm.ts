@@ -24,7 +24,8 @@ export class Firearm {
   private burstLeft = 0;
   private reload: { phase: ReloadPhase; elapsed: number; duration: number; fromEmpty: boolean; stop: boolean } | null = null;
 
-  constructor(readonly def: FirearmDef) {
+  /** Atributos atuais (com acessórios). */
+  constructor(public def: FirearmDef) {
     this.ammo = def.magazineSize;
     this.reserve = def.reserveAmmo ?? Number.POSITIVE_INFINITY;
   }

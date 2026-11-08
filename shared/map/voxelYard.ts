@@ -7,7 +7,7 @@ import type { BoxData, MapData, MaterialId } from './types';
  * mesmas rotas, coberturas e ângulos que a outra — a rota da direita de um
  * jogador é a rota da direita do adversário.
  *
- *            N  base VERMELHA (z ≈ −24)
+ *            N  base VERDE (z ≈ −24)
  *   ┌──────────────────────────────────┐
  *   │ contêineres │  meio  │  barracão │   ← rota esq. / meio / dir. (vista do sul)
  *   │             │ bunker │           │
@@ -39,7 +39,7 @@ export function buildVoxelYard(): MapData {
   const SIZE = 60;
   const H = SIZE / 2;
   const BLUE = 0x2f7fd8;
-  const RED = 0xd9433b;
+  const GREEN = 0x3fae49;
   const WHITE = 0xeeeeea;
   const YELLOW = 0xf2c12e;
 
@@ -54,7 +54,7 @@ export function buildVoxelYard(): MapData {
   const m = 'metal';
   const p = 'plastic';
 
-  // ── bases (azul ao sul, vermelha ao norte) ──
+  // ── bases (azul ao sul, verde ao norte) ──
   // sala em U aberta para o meio, com duas saídas laterais e uma central
   sym(c, -7, 0, 27, 7, 3, 27.25); // fundo
   // laterais com porta (z 22.5–24)
@@ -70,9 +70,9 @@ export function buildVoxelYard(): MapData {
   sym(c, 2, 0, 20, 7, 3, 20.25); // frente (dir.)
   sym(c, -2, 2.25, 20, 2, 3, 20.25); // verga da saída central
   // faixa do time (plástico colorido) acima da saída e pilares de marcação
-  sym(p, -2, 3, 19.75, 2, 3.5, 20.25, BLUE, RED);
-  sym(p, -2.75, 0, 19, -2, 1.25, 19.75, BLUE, RED);
-  sym(p, 2, 0, 19, 2.75, 1.25, 19.75, BLUE, RED);
+  sym(p, -2, 3, 19.75, 2, 3.5, 20.25, BLUE, GREEN);
+  sym(p, -2.75, 0, 19, -2, 1.25, 19.75, BLUE, GREEN);
+  sym(p, 2, 0, 19, 2.75, 1.25, 19.75, BLUE, GREEN);
   // coberturas logo na saída da base
   sym(c, -5, 0, 15.5, -1.5, 1.25, 15.75);
   sym(c, 1.5, 0, 15.5, 5, 1.25, 15.75);
@@ -130,9 +130,23 @@ export function buildVoxelYard(): MapData {
   sym(m, 20, 0, 9.25, 20.25, 2.25, 14.75, 0x4f7a3a);
   sym(m, 22.25, 0, 9.25, 22.5, 2.25, 14.75, 0x4f7a3a);
   sym(m, 20, 2.25, 9, 22.5, 2.5, 15, 0x4f7a3a);
-  sym(p, 18, 0, 16.5, 19, 1, 17.5, BLUE, RED); // caixotes empilhados
+  sym(p, 18, 0, 16.5, 19, 1, 17.5, BLUE, GREEN); // caixotes empilhados
   sym(p, 19, 0, 16.5, 20, 1, 17.5, YELLOW);
   sym(p, 18, 1, 16.5, 19, 2, 17.5, YELLOW);
+
+  // ── blocos de madeira (antigos caixotes), espelhados ──
+  /** Bloco de madeira de lado `size` (múltiplo do voxel) empilhado `stack` vezes. */
+  const crate = (x: number, z: number, size: number, stack = 1) => {
+    // cantos na grade de 0,25 m
+    const x0 = Math.round((x - size / 2) * 4) / 4;
+    const z0 = Math.round((z - size / 2) * 4) / 4;
+    for (let i = 0; i < stack; i++) sym(w, x0, i * size, z0, x0 + size, (i + 1) * size, z0 + size);
+  };
+  crate(4, 12.5, 0.75, 2);
+  crate(-3.5, 11.5, 0.75);
+  crate(-13, 2.5, 0.75);
+  crate(13.25, 15.5, 0.5);
+  crate(-5, 22.5, 0.75, 3);
 
   // ── linha central (z ≈ 0): coberturas das rotas laterais ──
   sym(c, 14, 0, -0.25, 18, 1.25, 0.25);
@@ -144,21 +158,11 @@ export function buildVoxelYard(): MapData {
     seed: 0,
     size: SIZE,
     wallHeight: 4,
+    invisibleWalls: true,
     // dentro da base azul, olhando para o norte (−Z)
     spawn: { x: 0, y: 0, z: 24 },
     boxes,
-    // caixas com física espelhadas (mesma proteção para os dois lados)
-    crates: [
-      { x: 4, z: 12.5, size: 0.8, stack: 2 },
-      { x: -4, z: -12.5, size: 0.8, stack: 2 },
-      { x: -3.5, z: 11.5, size: 0.7 },
-      { x: 3.5, z: -11.5, size: 0.7 },
-      { x: -13, z: 2.5, size: 0.8 },
-      { x: 13, z: -2.5, size: 0.8 },
-      { x: 13.25, z: 15.5, size: 0.6 },
-      { x: -13.25, z: -15.5, size: 0.6 },
-      { x: -5, z: 22.5, size: 0.7, stack: 3 },
-      { x: 5, z: -22.5, size: 0.7, stack: 3 },
-    ],
+    // sem caixas com física: os caixotes viraram blocos de madeira voxel (destrutíveis)
+    crates: [],
   };
 }

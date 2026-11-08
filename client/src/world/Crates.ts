@@ -37,7 +37,8 @@ export class Crates {
     layout?: readonly { x: number; z: number; size: number; stack?: number }[],
     seed = 4242,
   ) {
-    if (layout?.length) {
+    // lista do mapa (mesmo vazia) manda; sem lista, espalha ao acaso
+    if (layout) {
       for (const c of layout)
         for (let i = 0; i < (c.stack ?? 1); i++) this.add(c.x, c.size * (i + 0.5) + 0.01 * (i + 1), c.z, c.size, obstacles);
     } else this.place(obstacles, seed);

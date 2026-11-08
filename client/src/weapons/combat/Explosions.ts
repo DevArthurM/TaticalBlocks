@@ -13,6 +13,14 @@ export interface ExplosionHooks {
   blind(amount: number): void;
   /** Onda de choque: destrói blocos e empurra objetos com física. */
   blast?(center: THREE.Vector3, radius: number): void;
+  /** Qualquer detonação (inclusive luz e fogo) — o modo online reporta as do jogador. */
+  detonated?(kind: BlastKind, pos: THREE.Vector3, source: DetonationSource): void;
+}
+
+/** De onde veio a detonação: projétil local (reporta dano) ou de outro jogador. */
+export interface DetonationSource {
+  id: number;
+  remote: boolean;
 }
 
 interface FireZone {
@@ -48,7 +56,8 @@ export class Explosions {
     }
   }
 
-  detonate(kind: BlastKind, pos: THREE.Vector3, normal: THREE.Vector3 = UP): void {
+  detonate(kind: BlastKind, pos: THREE.Vector3, normal: THREE.Vector3 = UP, source: DetonationSource = { id: 0, remote: false }): void {
+    this.hooks.detonated?.(kind, pos, source);
     const dist = this.camera.position.distanceTo(pos);
     const near = Math.max(0, 1 - dist / 25);
     if (kind === 'flash') return this.flash(pos, dist);

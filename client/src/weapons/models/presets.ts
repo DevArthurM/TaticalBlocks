@@ -2,9 +2,9 @@ import type { ViewSetup } from './types';
 
 /** Posições padrão em primeira pessoa por família de arma. */
 export const VIEW_PRESETS = {
-  pistol: { hipPos: [0.09, -0.135, -0.36], hipRot: [0.03, 0.11, 0], adsDistance: 0.3, scale: 1.1, flashScale: 0.9, slideTravel: 0.032, shoulderL: [-0.24, -0.38, 0.06], elbowL: [-1, -0.35, 0.1], rigidHands: true },
-  revolver: { hipPos: [0.09, -0.139, -0.36], hipRot: [0.03, 0.11, 0], adsDistance: 0.3, scale: 1.1, flashScale: 1.2, shoulderL: [-0.24, -0.38, 0.06], elbowL: [-1, -0.35, 0.1], rigidHands: true },
-  smg: { hipPos: [0.11, -0.115, -0.31], hipRot: [0.01, 0.04, 0], adsDistance: 0.22, scale: 0.75, flashScale: 1 },
+  pistol: { hipPos: [0.125, -0.135, -0.36], hipRot: [0.03, 0.04, 0], adsDistance: 0.3, scale: 1.1, flashScale: 0.9, slideTravel: 0.032, shoulderL: [-0.24, -0.38, 0.06], elbowL: [-1, -0.35, 0.1], rigidHands: true },
+  revolver: { hipPos: [0.125, -0.139, -0.36], hipRot: [0.03, 0.04, 0], adsDistance: 0.3, scale: 1.1, flashScale: 1.2, shoulderL: [-0.24, -0.38, 0.06], elbowL: [-1, -0.35, 0.1], rigidHands: true },
+  smg: { hipPos: [0.1, -0.12, -0.255], hipRot: [0.01, 0.05, 0], adsDistance: 0.22, scale: 0.75, flashScale: 1 },
   rifle: { hipPos: [0.115, -0.125, -0.31], hipRot: [0.01, 0.035, 0], adsDistance: 0.2, scale: 0.75, flashScale: 1.3 },
   shotgun: { hipPos: [0.115, -0.13, -0.31], hipRot: [0.01, 0.035, 0], adsDistance: 0.21, scale: 0.75, flashScale: 1.7 },
   sniper: { hipPos: [0.115, -0.13, -0.3], hipRot: [0.01, 0.03, 0], adsDistance: 0.18, scale: 0.75, flashScale: 1.6 },

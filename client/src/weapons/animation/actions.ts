@@ -76,20 +76,49 @@ export const DRAW_CLIP: Clip = {
   cues: [{ t: 0.1, sound: 'draw' }],
 };
 
+export interface InspectOptions {
+  /** Inclinação do cano para cima (rad), ex.: pistolas. */
+  tiltUp?: number;
+  /** Checagem do pente: tira o pente (para baixo, ou para cima no P90) e põe de volta. */
+  mag?: 'down' | 'up' | null;
+}
+
+/** Janela (0..1) da inspeção em que o pente está fora e a munição aparece. */
+export const INSPECT_REVEAL = { mag: [0.5, 0.8] as const, noMag: [0.3, 0.9] as const };
+
 /**
- * Inspecionar (V): mostra a lateral esquerda, vira para a direita e volta.
+ * Inspecionar (V): mostra a lateral esquerda, a mão esquerda tira o pente para
+ * conferir a munição e o põe de volta, vira para a direita e volta.
  * `s` reduz o giro para armas longas/pesadas (que ocupariam a tela toda).
  */
-export function inspectClip(s = 1): Clip {
-  const a: Vec6 = scale6([-0.07, 0.05, 0.03, 0.18, 0.95, -0.35], s);
-  const b: Vec6 = scale6([-0.075, 0.055, 0.035, 0.22, 1.0, -0.4], s);
-  const c: Vec6 = scale6([-0.02, 0.04, 0.02, 0.1, -0.55, 0.45], s);
-  const d: Vec6 = scale6([-0.025, 0.045, 0.02, 0.12, -0.6, 0.5], s);
+export function inspectClip(s = 1, o: InspectOptions = {}): Clip {
+  const up: Vec6 = [0, 0.01 * (o.tiltUp ?? 0), 0, o.tiltUp ?? 0, 0, 0];
+  const at = (v: Vec6): Vec6 => add(scale6(v, s), up);
+  const a = at([-0.07, 0.05, 0.03, 0.18, 0.95, -0.35]);
+  const b = at([-0.075, 0.055, 0.035, 0.22, 1.0, -0.4]);
+  const c = at([-0.02, 0.04, 0.02, 0.1, -0.55, 0.45]);
+  const d = at([-0.025, 0.045, 0.02, 0.12, -0.6, 0.5]);
+  if (!o.mag) {
+    return {
+      pose: [k(0), k(0.16, a, 'out'), k(0.42, b), k(0.58, c, 'inOut'), k(0.82, d), k(1, Z, 'inOut')],
+      cues: [
+        { t: 0.05, sound: 'draw' },
+        { t: 0.52, sound: 'draw' },
+      ],
+    };
+  }
+  // checagem do pente: arma de lado com o pente virado para a câmera
+  const m = at([-0.05, 0.06, 0.03, 0.2, 0.55, -0.55]);
+  const dir = o.mag === 'up' ? 1 : -1;
+  const out: Vec6 = [0, dir * 0.055, 0.004, dir * -0.1, 0, 0];
   return {
-    pose: [k(0), k(0.16, a, 'out'), k(0.42, b), k(0.58, c, 'inOut'), k(0.82, d), k(1, Z, 'inOut')],
+    pose: [k(0), k(0.14, a, 'out'), k(0.3, b), k(0.42, m, 'inOut'), k(0.8, m), k(0.9, d, 'inOut'), k(1, Z, 'inOut')],
+    parts: [{ part: 'mag', keys: [k(0), k(0.44), k(0.52, out, 'out'), k(0.76, out), k(0.82, Z, 'in')] }],
+    left: [h(0, 'support'), h(0.38, 'support'), h(0.46, 'mag', 'inOut'), h(0.82, 'mag'), h(0.92, 'support', 'inOut'), h(1, 'support')],
     cues: [
       { t: 0.05, sound: 'draw' },
-      { t: 0.52, sound: 'draw' },
+      { t: 0.5, sound: 'magOut' },
+      { t: 0.81, sound: 'magIn' },
     ],
   };
 }

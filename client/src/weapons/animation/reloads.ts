@@ -76,49 +76,50 @@ function pistolReload(o: PistolReload): Clip {
 }
 
 // ═════════════════════ REVÓLVER ═════════════════════
-function revolverReload(): Clip {
-  const up: Vec6 = [-0.03, 0.05, 0.03, 0.9, -0.1, 0.5];
+/**
+ * Revólver: abre o tambor, aponta para cima e as cápsulas caem no chão;
+ * depois a mão leva bala a bala até a câmara (um ciclo por bala faltante) e fecha.
+ */
+function revolverShellReload(): Omit<Extract<ReloadAnim, { kind: 'shell' }>, 'kind'> {
+  const open: Vec6 = [-0.01, 0, 0, 0, 0, 1.3];
+  // arma trazida para o centro e para cima, com o tambor virado para o jogador
+  const up: Vec6 = [-0.06, 0.1, 0.05, 0.95, -0.1, 0.5];
+  const load: Vec6 = [-0.07, 0.085, 0.06, 0.28, -0.25, 0.65];
   return {
-    pose: [
-      k(0),
-      k(0.12, up, 'out'),
-      k(0.24, up),
-      k(0.27, add(up, [0, 0.03, 0, 0.25, 0, 0]), 'out'),
-      k(0.33, up, 'inOut'),
-      k(0.4, [-0.04, 0.02, 0.03, 0.2, -0.15, 0.6]),
-      k(0.66, [-0.04, 0.02, 0.03, 0.2, -0.15, 0.6]),
-      k(0.73, up),
-      k(0.78, [-0.01, 0.02, 0.01, 0.15, -0.05, -0.1], 'out'),
-      k(1, Z),
-    ],
-    parts: [
-      {
-        part: 'cylinder',
-        keys: [k(0), k(0.12), k(0.18, [-0.01, 0, 0, 0, 0, 1.3], 'out'), k(0.73, [-0.01, 0, 0, 0, 0, 1.3]), k(0.77, Z, 'in')],
-      },
-      {
-        part: 'speedloader',
-        keys: [k(0, [-0.05, -0.25, 0.12, 0, 0, 0]), k(0.36, [-0.05, -0.25, 0.12, 0, 0, 0]), k(0.52, [0, 0, 0.03, 0, 0, 0], 'out'), k(0.58, Z, 'in'), k(0.62, [0, 0, 0, 0, 0, 0.8])],
-      },
-    ],
-    vis: [{ part: 'speedloader', show: [[0.36, 0.66]] }],
-    left: [
-      h(0, 'support'),
-      h(0.1, 'cylinder', 'inOut'),
-      h(0.3, 'cylinder'),
-      h(0.4, 'low', 'inOut'),
-      h(0.5, 'speedloader', 'inOut'),
-      h(0.66, 'speedloader'),
-      h(0.72, 'cylinder', 'inOut'),
-      h(0.85, 'support', 'inOut'),
-      h(1, 'support'),
-    ],
-    cues: [
-      { t: 0.16, sound: 'cylinderOpen' },
-      { t: 0.26, sound: 'casings', event: 'ejectAll' },
-      { t: 0.56, sound: 'magIn' },
-      { t: 0.76, sound: 'cylinderClose' },
-    ],
+    start: {
+      pose: [
+        k(0),
+        k(0.25, [-0.06, 0.07, 0.05, 0.25, -0.15, 0.55], 'out'),
+        k(0.45, up, 'inOut'),
+        // tranco: a vareta empurra o extrator e as cápsulas caem
+        k(0.55, add(up, [0, 0.025, 0, 0.2, 0, 0]), 'out'),
+        k(0.65, up, 'inOut'),
+        k(1, load, 'inOut'),
+      ],
+      parts: [{ part: 'cylinder', keys: [k(0), k(0.2), k(0.32, open, 'out'), k(1, open)] }],
+      left: [h(0, 'support'), h(0.18, 'cylinder', 'inOut'), h(0.6, 'cylinder'), h(1, 'low', 'inOut')],
+      cues: [
+        { t: 0.26, sound: 'cylinderOpen' },
+        { t: 0.55, sound: 'casings', event: 'ejectAll' },
+      ],
+    },
+    insert: {
+      pose: [k(0, load), k(0.7, load), k(0.78, add(load, [0, -0.004, 0, -0.03, 0, 0]), 'out'), k(1, load)],
+      parts: [
+        { part: 'cylinder', keys: [k(0, open)] },
+        // bala sobe do bolso, alinha atrás da câmara e entra
+        { part: 'shell', keys: [k(0, [-0.07, -0.16, 0.1, 0.6, 0, 0]), k(0.5, [0, 0, 0.035, 0, 0, 0], 'out'), k(0.75, Z, 'in')] },
+      ],
+      vis: [{ part: 'shell', show: [[0, 0.78]] }],
+      left: [h(0, 'low'), h(0.15, 'shell', 'inOut'), h(0.75, 'shell'), h(1, 'low', 'inOut')],
+      cues: [{ t: 0.74, sound: 'shellInsert' }],
+    },
+    end: {
+      pose: [k(0, load), k(0.35, up, 'inOut'), k(0.5, add(up, [0, 0, 0, 0, 0, -0.25]), 'out'), k(1, Z, 'inOut')],
+      parts: [{ part: 'cylinder', keys: [k(0, open), k(0.35, open), k(0.5, Z, 'in')] }],
+      left: [h(0, 'low'), h(0.3, 'cylinder', 'inOut'), h(0.5, 'cylinder'), h(0.9, 'support', 'inOut'), h(1, 'support')],
+      cues: [{ t: 0.5, sound: 'cylinderClose' }],
+    },
   };
 }
 
@@ -233,30 +234,34 @@ const HANDLE_UP: Vec6 = [0, 0, 0, 0, 0, 1.1];
 function huntingShellReload(): Omit<Extract<ReloadAnim, { kind: 'shell' }>, 'kind'> {
   const tilt: Vec6 = [-0.02, 0.03, 0.02, 0.1, -0.05, -0.35];
   return {
+    // 1) só a mão direita: levanta a alavanca e puxa o ferrolho — o estojo é ejetado.
+    //    A mão de apoio continua no guarda-mão até o ferrolho estar todo aberto.
     start: {
-      pose: [k(0), k(0.4, tilt, 'out'), k(1, tilt)],
-      right: [h(0, 'grip'), h(0.35, 'bolt', 'inOut'), h(1, 'bolt')],
+      pose: [k(0), k(0.3, tilt, 'out'), k(0.78, tilt), k(0.84, add(tilt, [0, 0, 0.008, 0, 0.04, 0]), 'out'), k(1, tilt)],
+      right: [h(0, 'grip'), h(0.28, 'bolt', 'inOut'), h(1, 'bolt')],
       parts: [
-        { part: 'boltHandle', keys: [k(0), k(0.35), k(0.6, HANDLE_UP, 'out'), k(1, HANDLE_UP)] },
-        { part: 'bolt', keys: [k(0), k(0.6), k(0.9, BOLT_OPEN, 'out'), k(1, BOLT_OPEN)] },
+        { part: 'boltHandle', keys: [k(0), k(0.3), k(0.5, HANDLE_UP, 'out'), k(1, HANDLE_UP)] },
+        { part: 'bolt', keys: [k(0), k(0.52), k(0.78, BOLT_OPEN, 'out'), k(1, BOLT_OPEN)] },
       ],
-      left: [h(0, 'support'), h(0.5, 'support'), h(1, 'low', 'inOut')],
+      left: [h(0, 'support'), h(1, 'support')],
       cues: [
-        { t: 0.55, sound: 'boltUp' },
-        { t: 0.85, sound: 'boltBack' },
+        { t: 0.45, sound: 'boltUp' },
+        { t: 0.74, sound: 'boltBack' },
+        { t: 0.78, event: 'eject' },
       ],
     },
+    // 2) com o ferrolho aberto: a mão de apoio vai ao bolso, pega o cartucho e o empurra na janela
     insert: {
-      pose: [k(0, tilt), k(0.7, tilt), k(0.76, add(tilt, [0, -0.006, 0, 0, 0, 0]), 'out'), k(1, tilt)],
+      pose: [k(0, tilt), k(0.72, tilt), k(0.78, add(tilt, [0, -0.006, 0, 0, 0, 0]), 'out'), k(1, tilt)],
       right: [h(0, 'bolt'), h(1, 'bolt')],
       parts: [
         { part: 'boltHandle', keys: [k(0, HANDLE_UP)] },
         { part: 'bolt', keys: [k(0, BOLT_OPEN)] },
-        { part: 'shell', keys: [k(0, [-0.06, -0.08, 0.05, 0, 0, 0]), k(0.55, [0, 0.01, 0, 0, 0, 0], 'out'), k(0.75, [0, -0.02, 0, 0, 0, 0], 'in')] },
+        { part: 'shell', keys: [k(0, [-0.06, -0.08, 0.05, 0, 0, 0]), k(0.25, [-0.06, -0.08, 0.05, 0, 0, 0]), k(0.58, [0, 0.01, 0, 0, 0, 0], 'out'), k(0.78, [0, -0.02, 0, 0, 0, 0], 'in')] },
       ],
-      vis: [{ part: 'shell', show: [[0, 0.76]] }],
-      left: [h(0, 'low'), h(0.15, 'shell', 'inOut'), h(0.75, 'shell'), h(1, 'low', 'inOut')],
-      cues: [{ t: 0.72, sound: 'shellInsert' }],
+      vis: [{ part: 'shell', show: [[0.22, 0.8]] }],
+      left: [h(0, 'support'), h(0.22, 'low', 'inOut'), h(0.3, 'shell', 'inOut'), h(0.78, 'shell'), h(1, 'support', 'inOut')],
+      cues: [{ t: 0.75, sound: 'shellInsert' }],
     },
     end: {
       pose: [k(0, tilt), k(0.6, tilt), k(1, Z)],
@@ -265,7 +270,7 @@ function huntingShellReload(): Omit<Extract<ReloadAnim, { kind: 'shell' }>, 'kin
         { part: 'bolt', keys: [k(0, BOLT_OPEN), k(0.3, Z, 'in')] },
         { part: 'boltHandle', keys: [k(0, HANDLE_UP), k(0.3, HANDLE_UP), k(0.5, Z, 'in')] },
       ],
-      left: [h(0, 'low'), h(0.6, 'support', 'inOut'), h(1, 'support')],
+      left: [h(0, 'support'), h(1, 'support')],
       cues: [
         { t: 0.28, sound: 'boltForward' },
         { t: 0.5, sound: 'boltDown' },
@@ -410,7 +415,7 @@ export const RELOADS: Record<string, ReloadAnim> = {
   g17_inox: mag(pistolReload({ tilt: [-0.02, 0.025, 0, 0.15, -0.3, 0.35], drop: 0.32, rack: 'release' })),
   g34: mag(pistolReload({ tilt: [-0.045, 0.04, 0.02, 0.35, -0.05, 0.75], drop: 0.34, rack: 'slingshot' })),
   g19_fde: mag(pistolReload({ tilt: [-0.05, 0.015, 0.01, -0.12, -0.18, 0.42], drop: 0.36, rack: 'overhand', slap: true })),
-  revolver: mag(revolverReload()),
+  revolver: { kind: 'shell', ...revolverShellReload() },
 
   // submetralhadoras
   mp7: mag(boxMagReload({ tilt: [-0.03, 0.03, 0.02, 0.2, -0.1, 0.45], magOut: [0, -0.25, 0.04, 0.2, 0, 0], magIn: [0, -0.12, 0.02, 0.1, 0, 0], grab: false, charge: 'pull', chargeTravel: [0, 0, 0.05, 0, 0, 0] })),

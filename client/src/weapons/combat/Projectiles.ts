@@ -17,6 +17,20 @@ interface Projectile {
   blast: BlastKind;
   spin: THREE.Vector3;
   age: number;
+  /** Identificador para o modo online (liga lançamento ↔ explosão). */
+  netId: number;
+  /** Projétil de outro jogador: só efeitos visuais/destruição, sem reportar dano. */
+  remote: boolean;
+}
+
+/** Projétil lançado pelo próprio jogador (o modo online repassa aos outros). */
+export interface LaunchInfo {
+  id: number;
+  weapon: string;
+  kind: 'launch' | 'throw';
+  origin: THREE.Vector3;
+  vel: THREE.Vector3;
+  fuse: number | null;
 }
 
 const GRAVITY = { rocket: -1.5, grenade40: -9.8, thrown: -14 } as const;
@@ -29,6 +43,9 @@ export class Projectiles {
   private readonly dir = new THREE.Vector3();
   private readonly normal = new THREE.Vector3();
   private readonly tmp = new THREE.Vector3();
+  private nextId = 1;
+  /** Avisado a cada projétil lançado/arremessado pelo próprio jogador. */
+  onLaunch: (info: LaunchInfo) => void = () => {};
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -38,19 +55,28 @@ export class Projectiles {
     private readonly audio: SoundEngine,
   ) {}
 
-  launch(kind: 'rocket' | 'grenade40', origin: THREE.Vector3, dir: THREE.Vector3): void {
+  launch(kind: 'rocket' | 'grenade40', origin: THREE.Vector3, dir: THREE.Vector3, weapon = '', remote = false): void {
     const speed = kind === 'rocket' ? 45 : 34;
-    const mesh = kind === 'rocket' ? this.extractPart('rpg7', 'rocket') : this.extractPart('m32', 'shell');
-    this.add({ kind, mesh, pos: origin.clone(), vel: dir.clone().multiplyScalar(speed), gravity: GRAVITY[kind], fuse: null, blast: kind, spin: new THREE.Vector3(), age: 0 });
+    this.launchWithVelocity(kind, origin, dir.clone().multiplyScalar(speed), weapon, remote);
   }
 
-  throwItem(id: string, effect: ThrowableEffect, fuse: number | null, origin: THREE.Vector3, vel: THREE.Vector3): void {
+  /** Foguete/granada 40 mm com velocidade explícita (também usado para projéteis de outros jogadores). */
+  launchWithVelocity(kind: 'rocket' | 'grenade40', origin: THREE.Vector3, vel: THREE.Vector3, weapon = '', remote = false): void {
+    const mesh = kind === 'rocket' ? this.extractPart('rpg7', 'rocket') : this.extractPart('m32', 'shell');
+    const netId = this.nextId++;
+    this.add({ kind, mesh, pos: origin.clone(), vel: vel.clone(), gravity: GRAVITY[kind], fuse: null, blast: kind, spin: new THREE.Vector3(), age: 0, netId, remote });
+    if (!remote) this.onLaunch({ id: netId, weapon, kind: 'launch', origin: origin.clone(), vel: vel.clone(), fuse: null });
+  }
+
+  throwItem(id: string, effect: ThrowableEffect, fuse: number | null, origin: THREE.Vector3, vel: THREE.Vector3, remote = false): void {
     const model = buildWeaponModel(id);
     model.root.scale.setScalar(1.6);
     if (effect === 'fire') model.parts.get('flame')!.visible = true;
     model.parts.get('pin')?.removeFromParent();
     const spin = new THREE.Vector3(8 + Math.random() * 6, Math.random() * 4, Math.random() * 4);
-    this.add({ kind: 'thrown', mesh: model.root, pos: origin.clone(), vel: vel.clone(), gravity: GRAVITY.thrown, fuse, blast: effect, spin, age: 0 });
+    const netId = this.nextId++;
+    this.add({ kind: 'thrown', mesh: model.root, pos: origin.clone(), vel: vel.clone(), gravity: GRAVITY.thrown, fuse, blast: effect, spin, age: 0, netId, remote });
+    if (!remote) this.onLaunch({ id: netId, weapon: id, kind: 'throw', origin: origin.clone(), vel: vel.clone(), fuse });
   }
 
   update(dt: number): void {
@@ -62,7 +88,7 @@ export class Projectiles {
 
       const exploded = this.collide(p) || (p.fuse !== null && (p.fuse -= dt) <= 0) || p.age > 12;
       if (exploded) {
-        if (p.fuse !== null && p.fuse <= 0) this.explosions.detonate(p.blast, p.pos);
+        if (p.fuse !== null && p.fuse <= 0) this.explosions.detonate(p.blast, p.pos, undefined, { id: p.netId, remote: p.remote });
         this.scene.remove(p.mesh);
         this.list.splice(i, 1);
         continue;
@@ -105,7 +131,7 @@ export class Projectiles {
 
     // impacto direto
     if (p.kind !== 'thrown' || p.fuse === null) {
-      this.explosions.detonate(p.blast, hit.point, this.normal);
+      this.explosions.detonate(p.blast, hit.point, this.normal, { id: p.netId, remote: p.remote });
       return true;
     }
     // quique

@@ -28,6 +28,12 @@ function createPalette() {
     lens: new THREE.MeshStandardMaterial({ color: 0x1b2d3d, roughness: 0.1, metalness: 0.6, emissive: 0x0a1a28 }),
     sight: new THREE.MeshBasicMaterial({ color: 0xc8f560 }),
     redDot: new THREE.MeshBasicMaterial({ color: 0xff3b2f }),
+    // lente acesa da lanterna
+    lamp: new THREE.MeshBasicMaterial({ color: 0xfff4d6 }),
+    // vidro da mira holográfica/red dot: dá para ver através (antes era opaco e escondia o ponto)
+    glass: new THREE.MeshStandardMaterial({ color: 0x9fd4ff, roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.16, depthWrite: false }),
+    // plástico fumê translúcido (carregador do P90): dá para ver os cartuchos
+    smoke: std(0x4a4a3c, 0.2, 0.1, { transparent: true, opacity: 0.55, depthWrite: false }),
     grenade: std(0x4e5a33, 0.7, 0.1),
     grenadeDark: std(0x3a4426, 0.75, 0.1),
     yellow: std(0xd2b23c, 0.6, 0.1),

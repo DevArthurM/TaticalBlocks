@@ -1,6 +1,16 @@
 import * as THREE from 'three';
 import { clamp, damp, lerp } from '../core/math';
 import { createCamoTexture, createGloveTexture } from '../textures/CharacterTextures';
+import { registerCamo } from '../textures/teamCamo';
+import { solveArmIK } from '../online/avatar/ArmIK';
+import { buildThirdPersonWeapon, type TPWeapon } from '../online/avatar/ThirdPersonWeapon';
+
+/** Braços da sombra (m). */
+const ARM = { upper: 0.3, lower: 0.31 } as const;
+/** Empunhadura da arma da sombra no espaço do peito (mão direita). */
+const HOLD = new THREE.Vector3(0.08, 0.05, -0.22);
+const _t = new THREE.Vector3();
+const _pole = new THREE.Vector3();
 
 /** Medidas da perna (m). */
 const LEG = {
@@ -29,6 +39,8 @@ const TORSO = {
 
 const STAND_HIP = LEG.thigh + LEG.shin + LEG.ankle - 0.025;
 const CROUCH_HIP = 0.52;
+/** Altura do quadril deslizando. */
+const SLIDE_HIP = 0.3;
 
 export interface BodyState {
   position: THREE.Vector3;
@@ -39,6 +51,10 @@ export interface BodyState {
   crouch: number;
   /** -1 (esquerda) .. 1 (direita) — inclinação Q/E. */
   lean: number;
+  /** 0..1 — deslizando (pernas à frente, tronco para trás). */
+  slide?: number;
+  /** Olhar para cima/baixo (rad): a arma da sombra acompanha. */
+  pitch?: number;
 }
 
 interface Leg {
@@ -84,6 +100,7 @@ export class PlayerBody {
 
   constructor(scene: THREE.Scene) {
     const pants = new THREE.MeshStandardMaterial({ map: createCamoTexture(23), roughness: 0.95 });
+    registerCamo(pants, 23);
     const boots = new THREE.MeshStandardMaterial({ map: createGloveTexture(31), roughness: 0.75 });
     const belt = new THREE.MeshStandardMaterial({ color: 0x2b2a22, roughness: 0.8 });
 
@@ -138,7 +155,10 @@ export class PlayerBody {
     if (s.onGround) this.phase += (speed * dt * Math.PI) / stepLen;
     this.airborne = damp(this.airborne, s.onGround ? 0 : 1, 10, dt);
 
-    const hipH = lerp(STAND_HIP, CROUCH_HIP, s.crouch) - this.airborne * 0.02;
+    const slide = s.slide ?? 0;
+    // deslizando: sem passada, quadril quase no chão
+    this.stride *= 1 - slide;
+    const hipH = lerp(lerp(STAND_HIP, CROUCH_HIP, s.crouch) - this.airborne * 0.02, SLIDE_HIP, slide);
     this.pelvis.position.set(0, hipH + 0.04, LEG.back);
     // tronco: inclina para a frente agachado, de lado com Q/E e balança de leve ao andar
     // tronco um pouco atrás do quadril: olhando para baixo, a barriga não esconde os pés
@@ -148,6 +168,9 @@ export class PlayerBody {
       Math.sin(this.phase) * this.stride * 0.25,
       -s.lean * 0.3,
     );
+    // deslize: tronco recua (pernas vão à frente)
+    this.torso.rotation.x = lerp(this.torso.rotation.x, 0.35, slide);
+    if (this.upper) this.updateArms((s.pitch ?? 0) - this.torso.rotation.x);
     const lift = clamp(speed / 2, 0, 1) * lerp(0.13, 0.08, s.crouch);
 
     for (const [i, leg] of this.legs.entries()) {
@@ -164,9 +187,21 @@ export class PlayerBody {
         LEG.ankle + raise + this.airborne * 0.16,
         LEG.back - LEG.footForward + stanceZ + this.dir.y * swing - this.airborne * 0.08,
       );
+      if (slide > 0) {
+        // perna da frente esticada, a de trás dobrada por baixo
+        const lead = leg.side > 0;
+        this.tmpSlide.set(
+          leg.side * (LEG.hipX + 0.02),
+          lead ? LEG.ankle + 0.05 : LEG.ankle + 0.02,
+          lead ? LEG.back - 0.78 : LEG.back - 0.18,
+        );
+        this.foot.lerp(this.tmpSlide, slide);
+      }
       this.solveLeg(leg);
     }
   }
+
+  private readonly tmpSlide = new THREE.Vector3();
 
   /** IK de dois ossos no plano que contém quadril, pé e a frente do corpo. */
   private solveLeg(leg: Leg): void {
@@ -203,6 +238,49 @@ export class PlayerBody {
   }
 
   private readonly shadowOnly: THREE.Object3D[] = [];
+  private armR!: { shoulder: THREE.Group; elbow: THREE.Group };
+  private armL!: { shoulder: THREE.Group; elbow: THREE.Group };
+  private upper!: THREE.Group;
+  /** Arma da sombra (empunhadura na origem). */
+  private readonly holder = new THREE.Group();
+  private weapon: TPWeapon | null = null;
+  private weaponKey = '';
+
+  /** Troca a arma da sombra (mesmo modelo/acessórios que os outros jogadores veem). */
+  setWeapon(id: string | null, att = ''): void {
+    const key = `${id}|${att}`;
+    if (key === this.weaponKey) return;
+    this.weaponKey = key;
+    this.holder.clear();
+    this.weapon = id ? buildThirdPersonWeapon(id, att) : null;
+    if (!this.weapon) return;
+    this.weapon.root.traverse((o) => {
+      o.layers.set(SHADOW_ONLY_LAYER);
+      if (o instanceof THREE.Mesh) {
+        o.castShadow = true;
+        o.receiveShadow = false;
+      }
+    });
+    this.holder.add(this.weapon.root);
+  }
+
+  /** Braços da sombra: direita na empunhadura, esquerda no guarda-mão (ou livre). */
+  private updateArms(pitch: number): void {
+    this.holder.rotation.set(clamp(pitch, -1, 1) * 0.85, 0, 0);
+    this.holder.position.set(HOLD.x, HOLD.y + Math.sin(pitch) * 0.12, HOLD.z);
+    this.holder.updateMatrix();
+    const cat = this.weapon?.category;
+    const armed = !!this.weapon && cat !== 'melee' && cat !== 'throwable';
+    solveArmIK(this.armR.shoulder, this.armR.elbow, ARM.upper, ARM.lower, _t.copy(this.holder.position), _pole.set(0.7, -1, 0.4));
+    const support = armed ? this.weapon!.support : null;
+    if (support) {
+      _t.copy(support).applyMatrix4(this.holder.matrix);
+      solveArmIK(this.armL.shoulder, this.armL.elbow, ARM.upper, ARM.lower, _t, _pole.set(-0.7, -1, 0.4));
+    } else {
+      // mão livre perto do corpo
+      solveArmIK(this.armL.shoulder, this.armL.elbow, ARM.upper, ARM.lower, _t.set(-0.18, -0.12, -0.12), _pole.set(-0.6, -1, 0.3));
+    }
+  }
 
   /**
    * Tronco: camiseta camuflada + colete tático. Só a parte de baixo (barriga, bolsos e
@@ -241,13 +319,23 @@ export class PlayerBody {
     this.box(head, shirt, [0.12, 0.08, 0.12], [0, 0.04, 0]);
     this.box(head, vest, [0.26, 0.26, 0.26], [0, 0.2, 0]);
     this.box(head, strap, [0.3, 0.12, 0.3], [0, 0.3, 0]);
-    for (const side of [-1, 1]) {
-      const arm = new THREE.Group();
-      arm.position.set(side * (W / 2 + 0.05), U - 0.06, 0);
-      arm.rotation.set(-1.1, 0, side * 0.25); // braços à frente segurando a arma
-      upper.add(arm);
-      this.box(arm, shirt, [0.11, 0.5, 0.11], [0, -0.25, 0]);
+    // braços (ombro → cotovelo) por IK até a arma que o jogador segura
+    for (const side of [-1, 1] as const) {
+      const shoulder = new THREE.Group();
+      shoulder.position.set(side * (W / 2 + 0.04), U - 0.06, 0);
+      upper.add(shoulder);
+      this.box(shoulder, shirt, [0.11, ARM.upper, 0.11], [0, -ARM.upper / 2, 0]);
+      const elbow = new THREE.Group();
+      elbow.position.y = -ARM.upper;
+      shoulder.add(elbow);
+      this.box(elbow, shirt, [0.095, ARM.lower, 0.095], [0, -ARM.lower / 2, 0]);
+      this.box(elbow, vest, [0.1, 0.09, 0.11], [0, -ARM.lower + 0.03, 0]); // luva
+      if (side > 0) this.armR = { shoulder, elbow };
+      else this.armL = { shoulder, elbow };
     }
+    this.holder.position.copy(HOLD);
+    upper.add(this.holder);
+    this.upper = upper;
     this.shadowOnly.push(upper);
   }
 
