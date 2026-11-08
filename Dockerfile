@@ -20,7 +20,7 @@ RUN npm run build -w server && npm run build -w client
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
-    PORT=3000 \
+    PORT=3260 \
     CLIENT_DIR=/app/client/dist
 
 COPY package.json package-lock.json ./
@@ -33,7 +33,7 @@ COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/client/dist client/dist
 
 USER node
-EXPOSE 3000
+EXPOSE 3260
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:${PORT}/api/health > /dev/null || exit 1
 

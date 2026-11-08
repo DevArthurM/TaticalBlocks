@@ -1,4 +1,4 @@
-# TaticalBlocks — `docker compose up -d --build` e abra http://localhost:3000
+# TaticalBlocks — `docker compose up -d --build` e abra http://localhost:3260
 name: tatical-blocks
 services:
   tatical-blocks:
@@ -9,5 +9,5 @@ services:
     environment:
       PORT: 3260
     ports:
-      # mude a porta da esquerda para publicar em outra (ex.: "8080:3000")
-      - "${TB_PORT:-3000}:3000"
+      # a porta da direita é a do servidor (PORT); mude a da esquerda para publicar em outra (ex.: TB_PORT=8080)
+      - "${TB_PORT:-3260}:3260"

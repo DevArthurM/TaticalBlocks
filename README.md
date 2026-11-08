@@ -36,7 +36,7 @@ Abra http://localhost:5173: o **menu principal** tem o nome do jogador no topo, 
 docker compose up -d --build   # imagem única: jogo + API + online
 ```
 
-Abra http://localhost:3000. Um só contêiner roda o servidor NestJS, que entrega o jogo compilado em `/`, a API em `/api` e o WebSocket do online em `/server`. Para outra porta: `TB_PORT=8080 docker compose up -d`. A imagem (`Dockerfile`, multi-stage em `node:22-alpine`) compila cliente e servidor e leva só as dependências de produção, com *healthcheck* em `/api/health`.
+Abra http://localhost:3260. Um só contêiner roda o servidor NestJS, que entrega o jogo compilado em `/`, a API em `/api` e o WebSocket do online em `/server`. Para outra porta: `TB_PORT=8080 docker compose up -d`. A imagem (`Dockerfile`, multi-stage em `node:22-alpine`) compila cliente e servidor e leva só as dependências de produção, com *healthcheck* em `/api/health`.
 
 ### Logo
 
