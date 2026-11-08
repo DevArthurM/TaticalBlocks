@@ -7,7 +7,7 @@ services:
     container_name: tatical-blocks
     restart: unless-stopped
     environment:
-      PORT: 3000
+      PORT: 3260
     ports:
       # mude a porta da esquerda para publicar em outra (ex.: "8080:3000")
       - "${TB_PORT:-3000}:3000"
