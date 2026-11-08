@@ -7,7 +7,8 @@ export class MapController {
   constructor(private readonly mapService: MapService) {}
 
   @Get()
-  getMap(@Query('seed', new ParseIntPipe({ optional: true })) seed?: number): MapDto {
-    return this.mapService.getMap(seed);
+  getMap(@Query('mode') mode?: string, @Query('seed', new ParseIntPipe({ optional: true })) seed?: number): MapDto {
+    const m = mode === 'classic' || mode === 'hospital' ? mode : 'voxel';
+    return this.mapService.getMap(m, seed);
   }
 }

@@ -35,7 +35,19 @@ export type SoundName =
   | 'explosion'
   | 'flashbang'
   | 'glass'
-  | 'fire';
+  | 'fire'
+  | 'hitConcrete'
+  | 'hitWood'
+  | 'hitMetal'
+  | 'hitPlastic'
+  | 'flesh'
+  | 'gore'
+  | 'zombieGroan'
+  | 'zombieAttack'
+  | 'zombieDeath'
+  | 'playerHurt'
+  | 'boardBreak'
+  | 'hammer';
 
 interface ShotSpec {
   /** Volume do estampido de ruído. */
@@ -168,6 +180,49 @@ export class SoundEngine {
       case 'glass':
         for (let i = 0; i < 8; i++) this.click(3000 + Math.random() * 4000, 0.04, 0.3 * v, Math.random() * 0.15);
         return;
+      case 'hitConcrete':
+        this.noiseBurst({ filter: 'lowpass', freq: 2200, endFreq: 400, vol: 0.45 * v, dur: 0.09 });
+        return this.tone(140, 0.05, 0.25 * v);
+      case 'hitWood':
+        this.noiseBurst({ filter: 'bandpass', freq: 650, endFreq: 380, vol: 0.5 * v, dur: 0.1, q: 2 });
+        return this.tone(210, 0.06, 0.35 * v, 'triangle', 0.6);
+      case 'hitMetal':
+        this.tone(1650 + Math.random() * 500, 0.22, 0.22 * v, 'square', 0.97);
+        this.tone(2900 + Math.random() * 700, 0.14, 0.12 * v, 'sine', 0.98);
+        return this.click(5200, 0.03, 0.4 * v);
+      case 'hitPlastic':
+        this.noiseBurst({ filter: 'bandpass', freq: 1900, endFreq: 1100, vol: 0.4 * v, dur: 0.06, q: 3 });
+        return this.tone(420, 0.04, 0.2 * v, 'triangle', 0.8);
+      case 'flesh':
+        this.noiseBurst({ filter: 'lowpass', freq: 900, endFreq: 200, vol: 0.55 * v, dur: 0.09 });
+        return this.tone(110, 0.07, 0.35 * v);
+      case 'gore':
+        this.noiseBurst({ filter: 'bandpass', freq: 500, endFreq: 150, vol: 0.7 * v, dur: 0.22, q: 1.2 });
+        for (let i = 0; i < 4; i++) this.click(700 + Math.random() * 400, 0.04, 0.25 * v, 0.03 + i * 0.04);
+        return this.tone(80, 0.18, 0.5 * v);
+      case 'zombieGroan': {
+        const f = 70 + Math.random() * 40;
+        this.tone(f, 0.9 + Math.random() * 0.5, 0.18 * v, 'sawtooth', 0.7 + Math.random() * 0.2);
+        return this.noiseBurst({ filter: 'bandpass', freq: 350, endFreq: 220, vol: 0.12 * v, dur: 0.9, q: 3 });
+      }
+      case 'zombieAttack':
+        this.noiseBurst({ filter: 'bandpass', freq: 400, endFreq: 900, vol: 0.4 * v, dur: 0.18, q: 1.5 });
+        return this.tone(140, 0.25, 0.25 * v, 'sawtooth', 0.6);
+      case 'zombieDeath':
+        this.tone(95, 0.7, 0.3 * v, 'sawtooth', 0.4);
+        return this.noiseBurst({ filter: 'lowpass', freq: 700, endFreq: 120, vol: 0.3 * v, dur: 0.6 });
+      case 'boardBreak':
+        this.noiseBurst({ filter: 'bandpass', freq: 900, endFreq: 300, vol: 0.7 * v, dur: 0.18, q: 1.5 });
+        for (let i = 0; i < 3; i++) this.click(1500 + Math.random() * 1500, 0.03, 0.35 * v, 0.02 + i * 0.05);
+        return this.tone(160, 0.12, 0.35 * v, 'triangle', 0.5);
+      case 'hammer':
+        this.tone(260, 0.06, 0.5 * v, 'triangle', 0.6);
+        this.click(2400, 0.03, 0.45 * v);
+        this.tone(250, 0.06, 0.45 * v, 'triangle', 0.6, 0.18);
+        return this.click(2300, 0.03, 0.4 * v, 0.18);
+      case 'playerHurt':
+        this.tone(220, 0.12, 0.35 * v, 'square', 0.6);
+        return this.noiseBurst({ filter: 'lowpass', freq: 1200, endFreq: 300, vol: 0.4 * v, dur: 0.15 });
       case 'fire':
         return this.noiseBurst({ filter: 'lowpass', freq: 1200, endFreq: 300, vol: 0.8 * v, dur: 1 });
     }

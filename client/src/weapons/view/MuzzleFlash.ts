@@ -6,6 +6,9 @@ const FLASH_DURATION = 0.05;
 /** Clarão do cano; é reanexado à âncora `muzzle` da arma atual. */
 export class MuzzleFlash {
   readonly group = new THREE.Group();
+  /** Só os planos do clarão somem; a luz fica sempre na cena (intensidade 0), porque
+   * mudar a quantidade de luzes visíveis faz o three.js trocar os shaders da arma. */
+  private readonly sprites = new THREE.Group();
   private readonly light = new THREE.PointLight(0xffb060, 0, 1.4, 2);
   private readonly material: THREE.MeshBasicMaterial;
   private timer = 0;
@@ -26,8 +29,9 @@ export class MuzzleFlash {
     sideA.position.z = -0.06;
     const sideB = sideA.clone();
     sideB.rotation.set(Math.PI / 2, Math.PI / 2, 0);
-    this.group.add(front, sideA, sideB, this.light);
-    this.group.visible = false;
+    this.sprites.add(front, sideA, sideB);
+    this.sprites.visible = false;
+    this.group.add(this.sprites, this.light);
   }
 
   attach(anchor: THREE.Object3D | undefined, size: number): void {
@@ -39,7 +43,7 @@ export class MuzzleFlash {
   trigger(): void {
     if (!this.group.parent) return;
     this.timer = FLASH_DURATION;
-    this.group.visible = true;
+    this.sprites.visible = true;
     this.group.rotation.z = Math.random() * Math.PI * 2;
     // compensa a escala do modelo (pistolas são escaladas)
     const parentScale = this.group.parent.getWorldScale(new THREE.Vector3()).x || 1;
@@ -53,6 +57,9 @@ export class MuzzleFlash {
     const k = Math.max(0, this.timer / FLASH_DURATION);
     this.material.opacity = k;
     this.light.intensity = 4 * k;
-    if (this.timer <= 0) this.group.visible = false;
+    if (this.timer <= 0) {
+      this.sprites.visible = false;
+      this.light.intensity = 0;
+    }
   }
 }

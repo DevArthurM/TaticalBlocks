@@ -11,6 +11,8 @@ export interface ExplosionHooks {
   shake(amount: number): void;
   /** Cegueira por granada de luz (0..1). */
   blind(amount: number): void;
+  /** Onda de choque: destrói blocos e empurra objetos com física. */
+  blast?(center: THREE.Vector3, radius: number): void;
 }
 
 interface FireZone {
@@ -63,6 +65,7 @@ export class Explosions {
     this.lightFlash(pos, 30 * big, 0.25, 0xffa04a);
     this.audio.play('explosion', Math.max(0.25, 1 - dist / 70));
     this.hooks.shake(near * big);
+    this.hooks.blast?.(pos, 4.5 * big);
   }
 
   update(dt: number, time: number): void {

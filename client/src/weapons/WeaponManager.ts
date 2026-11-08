@@ -8,7 +8,8 @@ import { approach, damp, lerp } from '../core/math';
 import type { Decals } from '../effects/Decals';
 import type { ParticleSystem } from '../effects/ParticleSystem';
 import type { PlayerController } from '../player/PlayerController';
-import { boltCycle, DRAW_CLIP, MELEE_CLIPS, pumpCycle, throwClip } from './animation/actions';
+import { boltCycle, DRAW_CLIP, inspectClip, MELEE_CLIPS, pumpCycle, throwClip } from './animation/actions';
+import { ammoGifId, WEAPON_AMMO } from './models/ammo';
 import type { Clip, Cue } from './animation/Clip';
 import { RELOADS } from './animation/reloads';
 import type { Explosions } from './combat/Explosions';
@@ -30,6 +31,13 @@ export interface WeaponManagerDeps {
   decals: Decals;
   explosions: Explosions;
   projectiles: Projectiles;
+  /**
+   * Algo foi atingido (tiro/golpe). Retorna true se o alvo tratou o impacto
+   * (bloco destrutível ou caixa com física) — aí não se coloca marca de bala.
+   */
+  onHit?: (hit: THREE.Intersection, dir: THREE.Vector3, damage: number) => boolean;
+  /** Inimigos: testa o raio até `far` (antes do cenário). Retorna o acerto, se houver. */
+  enemies?: { shoot(origin: THREE.Vector3, dir: THREE.Vector3, far: number, damage: number): { distance: number } | null };
 }
 
 const DRAW_TIME: Record<WeaponCategory, number> = {
@@ -44,8 +52,23 @@ const DRAW_TIME: Record<WeaponCategory, number> = {
 };
 
 const THROW_TIME = 0.95;
+const INSPECT_TIME = 2.6;
+/** Intensidade do giro da inspeção por categoria (armas longas giram menos). */
+const INSPECT_SCALE: Record<WeaponCategory, number> = {
+  pistol: 1,
+  smg: 0.85,
+  rifle: 0.65,
+  shotgun: 0.65,
+  sniper: 0.55,
+  heavy: 0.4,
+  melee: 1,
+  throwable: 1,
+};
 
 /** Liga entrada → inventário → lógica da arma → viewmodel, disparo, golpes e arremessos. */
+/** Fração do recuo de cada arma que vira subida permanente da câmera. */
+const CAMERA_CLIMB = { hip: 0.55, ads: 0.4 } as const;
+
 export class WeaponManager {
   readonly inventory: Inventory;
   readonly viewmodel: Viewmodel;
@@ -54,6 +77,13 @@ export class WeaponManager {
   adsT = 0;
   /** Dispersão atual (rad), para a mira do HUD. */
   spread = 0;
+  /** FOV base (configuração do jogador). */
+  baseFov: number = CAMERA.fov;
+  /** Tempo restante da inspeção (V). */
+  inspectTime = 0;
+  /** Mirar segurando o botão direito ou alternando com um clique. */
+  aimMode: 'segurar' | 'alternar' = 'segurar';
+  private aimToggled = false;
   /** Tensão do braço (recuo que volta à posição inicial). */
   readonly armRecoil = new ArmRecoil();
   /** Parte do desvio que fica na arma/mira (o resto vai para a câmera com luneta). */
@@ -69,6 +99,8 @@ export class WeaponManager {
   private readonly dir = new THREE.Vector3();
   private readonly normal = new THREE.Vector3();
   private readonly flashLight = new THREE.PointLight(0xffb36b, 0, 9, 2);
+  private readonly ledgeL = new THREE.Vector3();
+  private readonly ledgeR = new THREE.Vector3();
   private flashTimer = 0;
 
   constructor(private readonly d: WeaponManagerDeps) {
@@ -100,8 +132,10 @@ export class WeaponManager {
   /** FOV da câmera do mundo considerando a mira da arma. */
   get fov(): number {
     const h = this.held;
-    const ads = h?.kind === 'firearm' ? h.def.adsFov : CAMERA.adsFov;
-    return lerp(CAMERA.fov, ads, this.adsT);
+    // zoom de miras de ferro/red-dot acompanha o FOV escolhido; lunetas mantêm o zoom fixo
+    const scale = this.baseFov / CAMERA.fov;
+    const ads = h?.kind === 'firearm' ? (h.def.sight === 'scope' ? h.def.adsFov : h.def.adsFov * scale) : CAMERA.adsFov * scale;
+    return lerp(this.baseFov, ads, this.adsT);
   }
 
   setLoadout(loadout: Loadout): void {
@@ -124,6 +158,8 @@ export class WeaponManager {
     const time = item ? DRAW_TIME[item.def.category] : 0;
     this.drawLock = time;
     this.adsT = 0;
+    this.aimToggled = false;
+    this.inspectTime = 0;
     this.armRecoil.reset();
     this.viewmodel.equip(item?.def ?? null, DRAW_CLIP, time);
     this.d.player.speedMultiplier = item?.def.moveSpeed ?? 1;
@@ -135,8 +171,11 @@ export class WeaponManager {
     this.busyLock = Math.max(0, this.busyLock - dt);
 
     const item = this.held;
-    const fireHeld = input.isDown(KEYS.fire);
-    const firePressed = input.wasPressed(KEYS.fire);
+    this.updateInspect(dt, input, item);
+    // pendurado/escalando: mãos ocupadas na quina
+    const ledgeBusy = this.d.player.ledgePhase !== null;
+    const fireHeld = input.isDown(KEYS.fire) && !ledgeBusy;
+    const firePressed = input.wasPressed(KEYS.fire) && !ledgeBusy;
     const ready = this.drawLock <= 0;
 
     if (item?.kind === 'firearm') this.updateFirearm(dt, item.def, item.gun, input, firePressed && ready, fireHeld && ready);
@@ -171,12 +210,63 @@ export class WeaponManager {
       lookDY: input.mouseDY,
       landingImpact: this.d.player.landingImpact,
       reload,
+      ledge: ledgeBusy && this.d.player.ledgeHands(this.ledgeL, this.ledgeR) ? this.toCamera() : null,
       armPitch: this.armRecoil.pitch,
       armYaw: this.armRecoil.yaw,
       ammo: gun?.ammo ?? 1,
       spin: gun?.spin ?? 0,
       hidden: this.scoped,
     });
+  }
+
+  /** Converte os pontos das mãos na quina para o espaço da câmera (= viewmodel). */
+  private toCamera(): { left: THREE.Vector3; right: THREE.Vector3 } {
+    const cam = this.d.camera;
+    cam.updateMatrixWorld();
+    this.ledgeL.applyMatrix4(cam.matrixWorldInverse);
+    this.ledgeR.applyMatrix4(cam.matrixWorldInverse);
+    return { left: this.ledgeL, right: this.ledgeR };
+  }
+
+  /**
+   * O que mostrar durante a inspeção: GIF do cartucho (ou da granada) e a contagem.
+   * `null` fora da inspeção ou com arma branca.
+   */
+  get inspection(): { gifId: string; count: number; reserve: number; t: number } | null {
+    if (this.inspectTime <= 0) return null;
+    const item = this.held;
+    const t = 1 - this.inspectTime / INSPECT_TIME;
+    if (item?.kind === 'firearm') {
+      const ammo = WEAPON_AMMO[item.def.id];
+      if (!ammo) return null;
+      return { gifId: ammoGifId(ammo), count: item.gun.ammo, reserve: item.gun.reserve, t };
+    }
+    if (item?.kind === 'throwable') return { gifId: item.def.id, count: this.inventory.grenades, reserve: Number.NaN, t };
+    return null;
+  }
+
+  /** V inspeciona; atirar, mirar, recarregar, correr ou pendurar cancelam. */
+  private updateInspect(dt: number, input: Input, item: HeldItem | undefined): void {
+    const gun = this.gun;
+    const blocked = !item || this.drawLock > 0 || this.busyLock > 0 || gun?.reloading || this.d.player.ledgePhase !== null;
+    if (input.wasPressed(KEYS.inspect) && !blocked) {
+      if (this.inspectTime > 0) this.cancelInspect();
+      else {
+        this.inspectTime = INSPECT_TIME;
+        this.viewmodel.play(inspectClip(INSPECT_SCALE[item!.def.category]), INSPECT_TIME);
+      }
+      return;
+    }
+    if (this.inspectTime <= 0) return;
+    const interrupted =
+      input.wasPressed(KEYS.fire) || input.isDown(KEYS.aim) || input.wasPressed(KEYS.reload) || this.d.player.sprinting || blocked;
+    if (interrupted) this.cancelInspect();
+    else this.inspectTime = Math.max(0, this.inspectTime - dt);
+  }
+
+  private cancelInspect(): void {
+    this.inspectTime = 0;
+    this.viewmodel.cancelAction();
   }
 
   // ─────────────────────────── troca ───────────────────────────
@@ -197,9 +287,17 @@ export class WeaponManager {
   // ─────────────────────────── armas de fogo ───────────────────────────
 
   private updateFirearm(dt: number, def: FirearmDef, gun: Firearm, input: Input, pressed: boolean, held: boolean): void {
-    const sprinting = this.d.player.sprinting;
+    const sprinting = this.d.player.sprinting || this.d.player.ledgePhase !== null;
     const canAim = def.sight !== 'none' && !gun.reloading && !sprinting && this.drawLock <= 0;
-    this.adsT = approach(this.adsT, canAim && input.isDown(KEYS.aim) ? 1 : 0, dt / (def.category === 'sniper' ? 0.22 : 0.14));
+    let wantsAim: boolean;
+    if (this.aimMode === 'alternar') {
+      if (input.wasPressed(KEYS.aim)) this.aimToggled = !this.aimToggled;
+      if (!canAim) this.aimToggled = false; // recarga, corrida ou saque cancelam a mira
+      wantsAim = this.aimToggled;
+    } else {
+      wantsAim = input.isDown(KEYS.aim);
+    }
+    this.adsT = approach(this.adsT, canAim && wantsAim ? 1 : 0, dt / (def.category === 'sniper' ? 0.22 : 0.14));
 
     const events = gun.update(dt, held && !sprinting);
     if (events.reloaded) this.viewmodel.onReloadComplete();
@@ -227,7 +325,7 @@ export class WeaponManager {
     } else {
       for (let i = 0; i < def.pellets; i++) {
         this.aimDirection(def.pellets > 1 ? this.spread + 0.035 : this.spread);
-        this.hitscan(def.range);
+        this.hitscan(def.range, def.damage);
       }
     }
 
@@ -236,6 +334,9 @@ export class WeaponManager {
     this.armRecoil.kick(def.armSpring, def.recoil.yaw / Math.max(def.recoil.pitch, 1e-4), steady);
     const kick = lerp(1, 0.6, this.adsT) * 0.3;
     d.player.addRecoil(def.recoil.pitch * kick, (Math.random() - 0.5) * 2 * def.recoil.yaw * kick);
+    // a mira sobe com os tiros e fica lá (o jogador compensa puxando o mouse)
+    const climb = lerp(CAMERA_CLIMB.hip, CAMERA_CLIMB.ads, this.adsT);
+    d.player.addCameraClimb(def.recoil.pitch * climb, (Math.random() - 0.35) * 2 * def.recoil.yaw * climb);
     this.bloom = Math.min(this.bloom + def.recoil.pitch * 0.5, 0.06);
     this.viewmodel.onFire(def.recoil.pitch, this.adsT, gun.ammo === 0, def.shell, !gun.manualAction);
     d.audio.shot(def.sound);
@@ -273,20 +374,23 @@ export class WeaponManager {
     this.d.player.aimOffsetYaw = this.armRecoil.yaw * scopeT;
   }
 
-  private hitscan(range: number): THREE.Intersection | undefined {
+  private hitscan(range: number, damage: number): THREE.Intersection | undefined {
     this.raycaster.set(this.origin, this.dir);
     this.raycaster.far = range;
     const hit = this.raycaster.intersectObjects(this.d.hitTargets, false)[0];
+    // inimigo na frente do cenário recebe o tiro
+    if (this.d.enemies?.shoot(this.origin, this.dir, hit ? hit.distance : range, damage)) return hit;
     if (hit?.face) {
       this.normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
-      this.impact(hit.point, this.normal, 1);
+      const handled = this.d.onHit?.(hit, this.dir, damage) ?? false;
+      this.impact(hit.point, this.normal, 1, !handled);
     }
     return hit;
   }
 
-  private impact(point: THREE.Vector3, normal: THREE.Vector3, power: number): void {
+  private impact(point: THREE.Vector3, normal: THREE.Vector3, power: number, decal = true): void {
     const { particles, decals } = this.d;
-    decals.place(point, normal, 0.1 * Math.sqrt(power));
+    if (decal) decals.place(point, normal, 0.1 * Math.sqrt(power));
     const p = this.origin.copy(point).addScaledVector(normal, 0.02);
     particles.burst('dust', Math.round(6 * power), p, normal, 1.6 * power, 0.9, { life: 0.5, size: 0.04 * Math.sqrt(power), grow: 0.3, gravity: -2, drag: 3, color: 0xdadcdf, colorJitter: 0.2 });
     particles.burst('spark', Math.round(4 * power), p, normal, 6, 1.2, { life: 0.18, size: 0.015, grow: 0.4, gravity: -9, drag: 1, color: 0xffc46b });
@@ -307,10 +411,16 @@ export class WeaponManager {
     this.raycaster.set(this.origin, this.dir);
     this.raycaster.far = def.range;
     const hit = this.raycaster.intersectObjects(d.hitTargets, false)[0];
+    if (d.enemies?.shoot(this.origin, this.dir, hit ? hit.distance : def.range, def.damage * 1.4)) {
+      d.audio.play('meleeHit', 0.8);
+      d.player.shake(0.1);
+      return;
+    }
     if (!hit?.face) return;
     this.normal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
     const power = def.damage / 40;
-    this.impact(hit.point, this.normal, power);
+    const handled = d.onHit?.(hit, this.dir, def.damage * 1.4) ?? false;
+    this.impact(hit.point, this.normal, power, !handled);
     d.audio.play('meleeHit', Math.min(1, 0.5 + power * 0.2));
     d.player.shake(0.12 * power);
   }
@@ -377,7 +487,8 @@ export class WeaponManager {
     const air = p.onGround ? 0 : 0.03;
     const hip = h.def.hipSpread + movement + air;
     const ads = h.def.adsSpread + movement * 0.15 + air * 0.5;
-    this.spread = lerp(hip, ads, this.adsT) + this.bloom * lerp(1, 0.35, this.adsT);
+    const crouch = lerp(1, 0.7, p.crouchAmount);
+    this.spread = (lerp(hip, ads, this.adsT) + this.bloom * lerp(1, 0.35, this.adsT)) * crouch;
   }
 
   private updateFlashLight(dt: number): void {

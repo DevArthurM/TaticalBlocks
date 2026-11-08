@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { BoxDto, MapDto } from './dto/map.dto';
+import { buildHospital } from '../../../shared/map/hospital';
+import { buildVoxelYard } from '../../../shared/map/voxelYard';
+import type { BoxDto, MapDto } from './dto/map.dto';
 import { createRandom, pick } from './random';
 
 const MAP_SIZE = 80;
@@ -11,8 +13,17 @@ const TARGET_BOX_COUNT = 34;
 @Injectable()
 export class MapService {
   private readonly cache = new Map<number, MapDto>();
+  private readonly voxelYard = buildVoxelYard();
+  private readonly hospital = buildHospital();
 
-  getMap(seed = 1337): MapDto {
+  /** Mapas: "Pátio Voxel" (padrão), "Hospital" (barricadas) e `classic` (aleatório antigo). */
+  getMap(mode: 'voxel' | 'hospital' | 'classic' = 'voxel', seed = 1337): MapDto {
+    if (mode === 'voxel') return this.voxelYard;
+    if (mode === 'hospital') return this.hospital;
+    return this.getClassic(seed);
+  }
+
+  private getClassic(seed: number): MapDto {
     const cached = this.cache.get(seed);
     if (cached) return cached;
     const map = this.generate(seed);

@@ -39,40 +39,6 @@ html, body {
 .ch-right { left: 0; transform: translateX(var(--gap)); }
 .ch-dot { position: absolute; width: 2px; height: 2px; left: -1px; top: -1px; background: #fff; }
 
-/* Munição */
-.ammo {
-  position: absolute; right: 32px; bottom: 28px; min-width: 200px; text-align: right;
-  text-shadow: var(--hud-shadow); padding: 12px 18px 14px;
-  background: linear-gradient(to left, rgba(10, 12, 16, 0.55), rgba(10, 12, 16, 0));
-  border-right: 3px solid var(--hud-accent);
-}
-.ammo-weapon { font-size: 14px; letter-spacing: 0.2em; color: var(--hud-dim); font-weight: 700; }
-.ammo-count { line-height: 1; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.ammo-mag { font-size: 64px; font-weight: 700; }
-.ammo-sep { font-size: 30px; color: var(--hud-dim); margin: 0 6px; }
-.ammo-reserve { font-size: 34px; font-weight: 700; color: var(--hud-dim); }
-.ammo-bullets { display: flex; gap: 3px; justify-content: flex-end; margin-top: 8px; }
-.bullet {
-  width: 6px; height: 16px; border-radius: 3px 3px 1px 1px; background: var(--hud-fg);
-  box-shadow: var(--hud-shadow); transition: opacity 0.12s, transform 0.12s;
-}
-.bullet.spent { opacity: 0.18; transform: translateY(3px); }
-.reload-bar { height: 3px; margin-top: 8px; background: rgba(255, 255, 255, 0.15); opacity: 0; transition: opacity 0.15s; }
-.reload-bar.active { opacity: 1; }
-.reload-fill { height: 100%; background: var(--hud-accent); transform-origin: left; transform: scaleX(0); }
-.ammo-hint { height: 18px; margin-top: 6px; font-size: 14px; font-weight: 700; letter-spacing: 0.15em; color: var(--hud-accent); }
-.ammo.low .ammo-mag { color: var(--hud-warn); }
-.ammo.low .ammo-hint { color: var(--hud-warn); }
-.ammo.empty .ammo-mag, .ammo.empty .ammo-hint { color: var(--hud-danger); }
-.ammo.low { border-right-color: var(--hud-warn); }
-.ammo.empty { border-right-color: var(--hud-danger); }
-
-/* Status do servidor */
-.status { position: absolute; left: 20px; top: 16px; font-size: 14px; color: var(--hud-dim); text-shadow: var(--hud-shadow); }
-.status b { color: var(--hud-fg); }
-.status .server { color: var(--hud-accent); }
-.status .local { color: var(--hud-warn); }
-
 /* Tela de pausa / início */
 .overlay {
   position: absolute; inset: 0; display: grid; place-items: center;
@@ -106,27 +72,6 @@ kbd {
 .tier-4 { --tier: var(--tier-4); }
 .tier-5 { --tier: var(--tier-5); }
 
-/* HUD: arma ativa */
-.ammo[class*='tier-'] { border-right-color: var(--tier); }
-.ammo-head { display: flex; justify-content: flex-end; align-items: baseline; gap: 10px; }
-.ammo-weapon { color: var(--tier, var(--hud-dim)); }
-.ammo-mode { font-size: 12px; font-weight: 700; letter-spacing: 0.15em; color: var(--hud-dim); padding: 1px 6px; border: 1px solid rgba(255,255,255,0.25); border-radius: 3px; }
-.ammo-bullets.dense { gap: 2px; flex-wrap: wrap; max-width: 260px; margin-left: auto; }
-.ammo-bullets.dense .bullet { width: 4px; height: 11px; }
-.spin-bar { height: 3px; margin-top: 8px; background: rgba(255,255,255,0.15); display: none; }
-.spin-bar.active { display: block; }
-.spin-bar i { display: block; height: 100%; background: var(--hud-warn); transform-origin: left; }
-
-/* HUD: slots */
-.slots { position: absolute; right: 32px; bottom: 210px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; text-shadow: var(--hud-shadow); }
-.slot { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; letter-spacing: 0.05em; color: var(--hud-dim); padding: 3px 10px; border-right: 3px solid transparent; transition: all 0.12s; }
-.slot kbd { min-width: 22px; padding: 0 4px; font-size: 12px; margin: 0; }
-.slot.active { color: var(--hud-fg); border-right-color: var(--tier, var(--hud-accent)); background: linear-gradient(to left, rgba(10,12,16,0.5), transparent); font-size: 17px; }
-.slot.empty { opacity: 0.35; }
-.slot em { font-style: normal; color: var(--hud-accent); }
-.arsenal-hint { position: absolute; left: 20px; bottom: 18px; font-size: 14px; color: var(--hud-dim); text-shadow: var(--hud-shadow); }
-.arsenal-hint kbd { min-width: 28px; }
-
 /* Luneta */
 .scope { position: absolute; inset: 0; opacity: 0; transition: opacity 0.08s; pointer-events: none; }
 .scope.on { opacity: 1; }
@@ -138,3 +83,76 @@ kbd {
 
 /* Granada de atordoamento */
 .blind { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+
+/* Aviso contextual (ex.: escalada) */
+.prompt {
+  position: absolute; left: 50%; bottom: 22%; transform: translate(-50%, 6px); opacity: 0;
+  padding: 6px 14px; border-radius: 6px; background: rgba(10, 12, 16, 0.55); text-shadow: var(--hud-shadow);
+  font-size: 15px; font-weight: 700; letter-spacing: 0.06em; transition: opacity 0.15s, transform 0.15s; white-space: nowrap;
+}
+.prompt.on { opacity: 1; transform: translate(-50%, 0); }
+.prompt kbd { min-width: 22px; margin: 0 4px; }
+
+/* Status na tela de pausa */
+.overlay-status { margin: 10px 0 0; font-size: 13px; color: var(--hud-dim); }
+.overlay-status b { color: var(--hud-fg); }
+.overlay-status .server { color: var(--hud-accent); }
+.overlay-status .local { color: var(--hud-warn); }
+
+/* Inspeção (V): munição flutuando ao lado da arma */
+.inspect { position: absolute; left: 0; top: 0; opacity: 0; pointer-events: none; will-change: transform, opacity; }
+.inspect:not(.on) { display: none; }
+.inspect-bob { display: flex; align-items: center; gap: 2px; transform: translate(-50%, -50%); animation: inspect-bob 1.6s ease-in-out infinite; }
+.inspect-gif { width: clamp(110px, 20vh, 190px); aspect-ratio: 16 / 9; height: auto; object-fit: contain; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.45)); image-rendering: pixelated; }
+.inspect-num { display: flex; align-items: baseline; gap: 6px; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 2px rgba(0, 0, 0, 0.8); }
+.inspect-num b { font-size: clamp(44px, 9vh, 80px); line-height: 1; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+.inspect-num span { font-size: clamp(20px, 3.6vh, 32px); font-weight: 700; color: rgba(255, 255, 255, 0.7); }
+@keyframes inspect-bob { 0%, 100% { translate: 0 0; } 50% { translate: 0 -6px; } }
+
+/* Ponto central ao mirar andando de lado (as miras da arma saem do centro) */
+.ads-dot {
+  position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 6px rgba(0, 0, 0, 0.35); opacity: 0; pointer-events: none;
+}
+
+/* Túnel de foco ao mirar: bordas escurecem e o centro claro encolhe com --f (0..1) */
+.focus-tunnel {
+  --f: 0;
+  position: absolute; inset: 0; pointer-events: none; opacity: min(1, calc(var(--f) * 1.6));
+  background: radial-gradient(
+    ellipse 75% 85% at 50% 50%,
+    transparent calc(62% - 30% * var(--f)),
+    rgba(4, 6, 10, calc(0.25 + 0.35 * var(--f))) calc(82% - 22% * var(--f)),
+    rgba(2, 3, 6, calc(0.55 + 0.35 * var(--f))) 100%
+  );
+}
+
+/* Dano: bordas vermelhas */
+.hurt {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: radial-gradient(ellipse 70% 70% at 50% 50%, transparent 45%, rgba(140, 0, 0, 0.35) 75%, rgba(120, 0, 0, 0.75) 100%);
+}
+
+/* Aviso de onda */
+.wave-banner {
+  position: absolute; left: 50%; top: 14%; transform: translate(-50%, -8px); opacity: 0; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.35s, transform 0.35s;
+}
+.wave-banner.on { opacity: 1; transform: translate(-50%, 0); }
+.wave-banner b { font-size: clamp(36px, 7vh, 64px); letter-spacing: 0.25em; color: #f2f2f2; }
+.wave-banner span { font-size: clamp(14px, 2.4vh, 20px); letter-spacing: 0.15em; color: #d65a4a; font-weight: 700; text-transform: uppercase; }
+
+/* Escolha de mapa na tela de pausa */
+.overlay-maps { margin-top: 18px; display: flex; justify-content: center; align-items: center; gap: 6px; }
+.overlay-maps span { font-size: 13px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--hud-dim); margin-right: 6px; }
+.overlay-maps button {
+  all: unset; pointer-events: auto; cursor: pointer; padding: 6px 14px; border-radius: 6px; font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.06);
+}
+.overlay-maps button:hover { background: rgba(255, 255, 255, 0.14); }
+.overlay-maps button.on { border-color: var(--hud-accent); color: var(--hud-accent); background: rgba(200, 245, 96, 0.12); cursor: default; }
+.overlay.hidden .overlay-maps button { pointer-events: none; }
+
+.overlay-status .loading { color: var(--hud-accent); animation: pulse-loading 1s ease-in-out infinite alternate; }
+@keyframes pulse-loading { from { opacity: 0.45; } to { opacity: 1; } }

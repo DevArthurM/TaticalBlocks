@@ -6,7 +6,9 @@ import { WEAPONS } from '@shared/weapons/catalog';
 import type { WeaponDef } from '@shared/weapons/types';
 import { applyPalette, GIFEncoder, quantize } from 'gifenc';
 import * as THREE from 'three';
+import { AMMO_LABEL, AMMO_TYPES, ammoGifId, buildAmmoModel } from '../src/weapons/models/ammo';
 import { buildWeaponModel } from '../src/weapons/models/registry';
+import type { WeaponModel } from '../src/weapons/models/types';
 
 export const GIF = {
   width: 160,
@@ -45,14 +47,13 @@ readback.height = GIF.height;
 const ctx = readback.getContext('2d', { willReadFrequently: true })!;
 
 /** Coloca o modelo deitado/centralizado na plataforma e enquadra a câmera. */
-function stage(def: WeaponDef): void {
+function stage(model: WeaponModel, layDown: boolean): void {
   turntable.clear();
-  const model = buildWeaponModel(def.id);
   const holder = new THREE.Group();
   holder.add(model.root);
   model.root.scale.setScalar(1);
   // armas brancas são modeladas em pé (cabo em +Y): deita para ficar horizontal
-  if (def.kind === 'melee') holder.rotation.z = Math.PI / 2;
+  if (layDown) holder.rotation.z = Math.PI / 2;
 
   holder.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(holder);
@@ -94,7 +95,11 @@ function captureFrame(angle: number): Uint8ClampedArray {
 }
 
 export function encodeWeaponGif(def: WeaponDef): Uint8Array {
-  stage(def);
+  return encodeModelGif(buildWeaponModel(def.id), def.kind === 'melee');
+}
+
+export function encodeModelGif(model: WeaponModel, layDown = false): Uint8Array {
+  stage(model, layDown);
   const frames: Uint8ClampedArray[] = [];
   for (let i = 0; i < GIF.frames; i++) frames.push(captureFrame((i / GIF.frames) * Math.PI * 2));
 
@@ -153,6 +158,31 @@ async function doRenderAll(): Promise<{ count: number; bytes: number }> {
   status.textContent = `✓ ${WEAPONS.length} GIFs salvos — total ${(total / 1024).toFixed(0)} KB (média ${(total / WEAPONS.length / 1024).toFixed(1)} KB)`;
   return { count: WEAPONS.length, bytes: total };
 }
+
+/** GIFs dos cartuchos (inspeção de munição, tecla V). */
+async function renderAmmo(): Promise<{ count: number; bytes: number }> {
+  const status = document.getElementById('status')!;
+  const grid = document.getElementById('grid')!;
+  let total = 0;
+  for (const [i, type] of AMMO_TYPES.entries()) {
+    status.textContent = `Cartucho ${i + 1}/${AMMO_TYPES.length}: ${AMMO_LABEL[type]}…`;
+    await new Promise((r) => setTimeout(r, 0));
+    const bytes = encodeModelGif(buildAmmoModel(type));
+    await save(ammoGifId(type), bytes);
+    total += bytes.length;
+    const fig = document.createElement('figure');
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/gif' }));
+    fig.append(img);
+    fig.insertAdjacentHTML('beforeend', `<figcaption><span>${AMMO_LABEL[type]}</span><span>${(bytes.length / 1024).toFixed(1)} KB</span></figcaption>`);
+    grid.append(fig);
+  }
+  status.textContent = `✓ ${AMMO_TYPES.length} cartuchos salvos — ${(total / 1024).toFixed(0)} KB`;
+  return { count: AMMO_TYPES.length, bytes: total };
+}
+(window as unknown as { renderAmmo: typeof renderAmmo }).renderAmmo = renderAmmo;
+
+document.getElementById('run-ammo')?.addEventListener('click', () => void renderAmmo());
 
 const button = document.getElementById('run') as HTMLButtonElement;
 button.addEventListener('click', async () => {

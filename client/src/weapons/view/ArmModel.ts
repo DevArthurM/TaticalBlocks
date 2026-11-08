@@ -10,6 +10,11 @@ const tmpBend = new THREE.Vector3();
 const tmpHint = new THREE.Vector3();
 /** Lado convexo da dobra do cotovelo no espaço local do braço. */
 const ELBOW_LOCAL = new THREE.Vector3(0, 0, -1);
+const tmpLocal = new THREE.Quaternion();
+const tmpRot = new THREE.Quaternion();
+const tmpE = new THREE.Vector3();
+const tmpH = new THREE.Vector3();
+const tmpT = new THREE.Vector3();
 
 /**
  * Braço voxel inspirado na referência: manga camuflada, barra dobrada,
@@ -21,6 +26,10 @@ export class ArmModel {
   private readonly handLocal = new THREE.Vector3();
   /** Braço de cima (manga + barra). */
   private readonly upper = new THREE.Group();
+  /** Antebraço, articulado no cotovelo (origem do grupo = cotovelo). */
+  readonly elbow = new THREE.Group();
+  /** Ponto da palma (alvo da mão). */
+  readonly hand = new THREE.Object3D();
 
   constructor(m: ArmMaterials, side: 'left' | 'right', scale = 1) {
     const mirror = side === 'left' ? -1 : 1;
@@ -32,7 +41,7 @@ export class ArmModel {
     boxPart(this.upper, m.sleeve, [0.085, 0.7, 0.085], [0, 0.37, 0]);
     boxPart(this.upper, m.cuff, [0.1, 0.052, 0.1], [0, 0.025, 0]);
 
-    const forearm = new THREE.Group();
+    const forearm = this.elbow;
     forearm.position.y = -0.24;
     this.root.add(forearm);
     boxPart(forearm, m.skin, [0.064, 0.1, 0.064], [0, -0.05, 0]);
@@ -52,7 +61,7 @@ export class ArmModel {
     boxPart(glove, m.glove, [0.078, 0.024, 0.03], [0, -0.075, -0.034]);
     boxPart(glove, m.glove, [0.026, 0.04, 0.03], [-0.04 * mirror, -0.045, -0.02]);
 
-    const hand = new THREE.Object3D();
+    const hand = this.hand;
     hand.position.y = -0.058;
     glove.add(hand);
 
@@ -84,5 +93,30 @@ export class ArmModel {
     if (roll !== 0) this.root.quaternion.premultiply(rollQuat.setFromAxisAngle(tmpTo, roll));
     tmpOffset.copy(this.handLocal).applyQuaternion(this.root.quaternion);
     this.root.position.copy(hand).sub(tmpOffset);
+  }
+
+  /** Antebraço reto em relação ao braço (antes de posicionar). */
+  resetElbow(): void {
+    this.elbow.quaternion.identity();
+  }
+
+  /**
+   * Dobra o cotovelo aplicando `worldRot` (rotação no espaço da câmera) ao antebraço,
+   * em torno do próprio cotovelo. O braço de cima não se move.
+   */
+  bendElbow(worldRot: THREE.Quaternion): void {
+    // local = raiz⁻¹ · R · raiz (a raiz é filha direta do espaço da câmera)
+    tmpLocal.copy(this.root.quaternion).invert().multiply(worldRot).multiply(this.root.quaternion);
+    this.elbow.quaternion.premultiply(tmpLocal);
+  }
+
+  /** Dobra o cotovelo o mínimo necessário para a mão apontar para `target`. */
+  bendElbowToward(target: THREE.Vector3): void {
+    this.root.updateMatrixWorld(true);
+    this.elbow.getWorldPosition(tmpE);
+    this.hand.getWorldPosition(tmpH);
+    tmpH.sub(tmpE).normalize();
+    tmpT.subVectors(target, tmpE).normalize();
+    this.bendElbow(tmpRot.setFromUnitVectors(tmpH, tmpT));
   }
 }

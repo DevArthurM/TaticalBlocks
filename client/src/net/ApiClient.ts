@@ -1,7 +1,7 @@
 import { WEAPONS } from '@shared/weapons/catalog';
 import { DEFAULT_LOADOUT, type Loadout, validateLoadout } from '@shared/weapons/loadout';
 import type { WeaponDef } from '@shared/weapons/types';
-import { FALLBACK_MAP } from '../config/fallbackMap';
+import { FALLBACK_HOSPITAL, FALLBACK_MAP } from '../config/fallbackMap';
 import type { DataSource, MapData } from '../shared/types';
 
 export interface Loaded<T> {
@@ -18,9 +18,9 @@ export class ApiClient {
     private readonly timeoutMs = 1500,
   ) {}
 
-  loadMap(seed?: number): Promise<Loaded<MapData>> {
-    const query = seed !== undefined ? `?seed=${seed}` : '';
-    return this.withFallback(`/map${query}`, FALLBACK_MAP);
+  /** `mode`: 'voxel' (Pátio, padrão) ou 'hospital'. */
+  loadMap(mode = 'voxel'): Promise<Loaded<MapData>> {
+    return this.withFallback(`/map?mode=${encodeURIComponent(mode)}`, mode === 'hospital' ? FALLBACK_HOSPITAL : FALLBACK_MAP);
   }
 
   loadCatalog(): Promise<Loaded<readonly WeaponDef[]>> {

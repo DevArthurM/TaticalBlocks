@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 /** Sol direcional com sombras suaves + luz hemisférica para preencher. */
-export function createLighting(scene: THREE.Scene, mapSize: number): void {
+export function createLighting(scene: THREE.Scene, mapSize: number): THREE.DirectionalLight {
   const hemi = new THREE.HemisphereLight(0xe8f0ff, 0x7d838c, 0.85);
   scene.add(hemi);
 
@@ -20,6 +20,9 @@ export function createLighting(scene: THREE.Scene, mapSize: number): void {
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.03;
   sun.shadow.radius = 3;
+  // camada 1: objetos que só projetam sombra (ex.: pelve do próprio jogador)
+  sun.shadow.camera.layers.enable(1);
   scene.add(sun);
   scene.add(sun.target);
+  return sun;
 }

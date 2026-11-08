@@ -1,5 +1,5 @@
 import type { MeleeStyle } from '@shared/weapons/types';
-import { type Clip, type Vec6, Z, add, h, k } from './Clip';
+import { type Clip, type Vec6, Z, add, h, k, scale6 } from './Clip';
 
 /** Ciclos de ação (pump/ferrolho), golpes corpo a corpo, arremesso e saque. */
 
@@ -75,3 +75,21 @@ export const DRAW_CLIP: Clip = {
   pose: [k(0, [0.02, -0.2, 0.06, -0.9, 0.3, 0.2]), k(1, Z, 'out')],
   cues: [{ t: 0.1, sound: 'draw' }],
 };
+
+/**
+ * Inspecionar (V): mostra a lateral esquerda, vira para a direita e volta.
+ * `s` reduz o giro para armas longas/pesadas (que ocupariam a tela toda).
+ */
+export function inspectClip(s = 1): Clip {
+  const a: Vec6 = scale6([-0.07, 0.05, 0.03, 0.18, 0.95, -0.35], s);
+  const b: Vec6 = scale6([-0.075, 0.055, 0.035, 0.22, 1.0, -0.4], s);
+  const c: Vec6 = scale6([-0.02, 0.04, 0.02, 0.1, -0.55, 0.45], s);
+  const d: Vec6 = scale6([-0.025, 0.045, 0.02, 0.12, -0.6, 0.5], s);
+  return {
+    pose: [k(0), k(0.16, a, 'out'), k(0.42, b), k(0.58, c, 'inOut'), k(0.82, d), k(1, Z, 'inOut')],
+    cues: [
+      { t: 0.05, sound: 'draw' },
+      { t: 0.52, sound: 'draw' },
+    ],
+  };
+}

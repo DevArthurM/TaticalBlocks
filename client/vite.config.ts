@@ -39,6 +39,8 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // túneis ngrok (o subdomínio muda a cada sessão)
+    allowedHosts: ['.ngrok-free.app', '.ngrok.app'],
     proxy: {
       '/api': 'http://localhost:3000',
     },

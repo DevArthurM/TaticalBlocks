@@ -24,6 +24,8 @@ export interface ViewmodelFrame {
   landingImpact: number;
   /** Clipe de recarga atual e seu tempo normalizado. */
   reload: { clip: Clip; t: number; key: string; fromEmpty: boolean } | null;
+  /** Mãos apoiadas numa quina (espaço da câmera) — escalada. */
+  ledge: { left: THREE.Vector3; right: THREE.Vector3 } | null;
   /** Desvio do braço pela tensão do recuo (rad; + = cima / esquerda). */
   armPitch: number;
   armYaw: number;
@@ -53,8 +55,12 @@ const FIXED_TARGETS: Record<'rest' | 'low' | 'lowRight', { left: THREE.Vector3; 
 };
 
 const SPRINT_OFFSET = { pos: new THREE.Vector3(-0.05, -0.045, 0.03), rot: new THREE.Vector3(-0.45, 0.6, 0.28) };
-/** Vetor do pivô (antebraço) até a arma, espaço da câmera. */
-const ARM_PIVOT = new THREE.Vector3(0, 0.11, -0.24);
+/** Mola da inércia lateral (andar de lado). */
+const STRAFE_SPRING = {
+  hip: { stiffness: 70, damping: 11 },
+  /** ζ = 1,1 → sem oscilação; ω ≈ 4,5 rad/s → resposta em ~0,5 s. */
+  ads: { stiffness: 20, damping: 2 * Math.sqrt(20) * 1.1 },
+} as const;
 const SLIDE_BACK_TIME = 0.035;
 const SLIDE_RETURN_TIME = 0.07;
 
@@ -110,6 +116,10 @@ export class Viewmodel {
   private readonly tmpS = new THREE.Vector3();
   private readonly tmpE = new THREE.Vector3();
   private readonly tmpM = new THREE.Matrix4();
+  /** 0..1 — mãos na quina (escalada). */
+  private ledgeT = 0;
+  private readonly ledgeL = new THREE.Vector3();
+  private readonly ledgeR = new THREE.Vector3();
   /** 0 = mão esquerda presa à arma, 1 = livre (recarga). */
   private leftFree = 0;
   private readonly leftTarget = new THREE.Vector3();
@@ -124,6 +134,11 @@ export class Viewmodel {
     this.leftArm = new ArmModel(mats, 'left', 0.7);
     this.root.add(this.rightArm.root, this.leftArm.root);
     this.shells = new ShellEjector(this.root);
+  }
+
+  /** Quanto o braço está inclinado pela inércia lateral (0 = centrado). */
+  get strafeTilt(): number {
+    return Math.abs(this.strafeX);
   }
 
   get weaponId(): string | null {
@@ -275,8 +290,16 @@ export class Viewmodel {
 
     this.applyBob(f);
     this.applySway(f);
-    this.applyArmTension(f);
     this.applyStrafeInertia(f);
+
+    // escalada: arma desce e sai de cena enquanto as mãos vão para a quina
+    this.ledgeT = damp(this.ledgeT, f.ledge ? 1 : 0, 12, f.dt);
+    if (f.ledge) {
+      this.ledgeL.copy(f.ledge.left);
+      this.ledgeR.copy(f.ledge.right);
+    }
+    this.pos.y -= this.ledgeT * 0.34;
+    this.rot.x -= this.ledgeT * 0.7;
 
     const p = this.pose;
     this.poseGroup.position.set(this.pos.x + p[0], this.pos.y + p[1] + this.landing.value, this.pos.z + p[2] + this.recoilPos.value * 0.04);
@@ -287,13 +310,20 @@ export class Viewmodel {
     cur.model.root.visible = !this.modelHidden;
 
     // ── mãos ──
+    this.rightArm.resetElbow();
+    this.leftArm.resetElbow();
     this.root.updateMatrixWorld(true);
     this.resolveHand(right, 'right', this.rightTarget);
     this.resolveHand(left, 'left', this.leftTarget);
     const shoulderL = view.shoulderL ? this.tmpS.set(view.shoulderL[0], view.shoulderL[1], view.shoulderL[2]) : SHOULDER_L;
     const elbowL = view.elbowL ? this.tmpE.set(view.elbowL[0], view.elbowL[1], view.elbowL[2]).normalize() : ELBOW_L;
 
-    if (view.rigidHands && cur.grip) {
+    if (this.ledgeT > 0.001) {
+      this.rightTarget.lerp(this.ledgeR, this.ledgeT);
+      this.leftTarget.lerp(this.ledgeL, this.ledgeT);
+      this.rightArm.aim(this.rightTarget, SHOULDER_R, ELBOW_R);
+      this.leftArm.aim(this.leftTarget, SHOULDER_L, ELBOW_L);
+    } else if (view.rigidHands && cur.grip) {
       // mão direita: presa rigidamente à arma (mesmo encaixe da pose de referência)
       this.applyRigid(this.rightArm, cur.grip.right);
       // mão esquerda: presa à arma; na recarga solta suavemente e segue a animação
@@ -310,11 +340,35 @@ export class Viewmodel {
           this.leftArm.root.quaternion.slerp(this.tmpQ, this.leftFree);
         }
       }
-      return;
+    } else {
+      this.rightArm.aim(this.rightTarget, SHOULDER_R, ELBOW_R);
+      this.leftArm.aim(this.leftTarget, shoulderL, elbowL);
     }
 
-    this.rightArm.aim(this.rightTarget, SHOULDER_R, ELBOW_R);
-    this.leftArm.aim(this.leftTarget, shoulderL, elbowL);
+    this.applyElbowTension(f);
+  }
+
+  /**
+   * Tensão do recuo percebida no COTOVELO: o braço de cima fica parado e o antebraço
+   * direito dobra no cotovelo; a arma gira junto (pivô = cotovelo direito).
+   * O antebraço esquerdo dobra no próprio cotovelo o suficiente para a mão seguir a arma.
+   */
+  private applyElbowTension(f: ViewmodelFrame): void {
+    if (f.armPitch === 0 && f.armYaw === 0) return;
+    const rot = this.tmpQ.setFromEuler(this.tmpEuler.set(f.armPitch, f.armYaw, 0, 'YXZ'));
+
+    this.root.updateMatrixWorld(true);
+    const elbowR = this.rightArm.elbow.getWorldPosition(this.tmpS);
+    const handL = this.leftArm.hand.getWorldPosition(this.tmpP);
+
+    // arma gira em torno do cotovelo direito
+    this.poseGroup.position.sub(elbowR).applyQuaternion(rot).add(elbowR);
+    this.poseGroup.quaternion.premultiply(rot);
+
+    this.rightArm.bendElbow(rot);
+    // onde a mão esquerda tem de ir para continuar presa à arma
+    handL.sub(elbowR).applyQuaternion(rot).add(elbowR);
+    this.leftArm.bendElbowToward(handL);
   }
 
   // ───────────────────────────────────────────
@@ -470,26 +524,17 @@ export class Viewmodel {
    * Andar para a direita deixa braços/arma para trás: deslocam e giram para a esquerda
    * (e o inverso para a esquerda). Igual mirando ou não; a mira do HUD fica fixa no centro.
    */
-  /**
-   * Gira arma + mãos em torno de um pivô no antebraço (atrás/abaixo da arma),
-   * conforme a tensão do braço. Como a mira de ferro está na arma, ela acompanha.
-   */
-  private applyArmTension(f: ViewmodelFrame): void {
-    if (f.armPitch === 0 && f.armYaw === 0) return;
-    this.tmpEuler.set(f.armPitch, f.armYaw, 0, 'YXZ');
-    this.tmpB.copy(ARM_PIVOT).applyEuler(this.tmpEuler).sub(ARM_PIVOT);
-    this.pos.add(this.tmpB);
-    this.rot.x += f.armPitch;
-    this.rot.y += f.armYaw;
-  }
-
   private applyStrafeInertia(f: ViewmodelFrame): void {
     const target = clamp(-f.strafe / 4.6, -1.4, 1.4);
+    // Mirando: mola mais macia e criticamente amortecida (sem tranco nem balanço).
+    // Quadril: mola mais viva, com um leve passar do ponto.
+    const stiffness = lerp(STRAFE_SPRING.hip.stiffness, STRAFE_SPRING.ads.stiffness, f.adsT);
+    const damping = lerp(STRAFE_SPRING.hip.damping, STRAFE_SPRING.ads.damping, f.adsT);
     // sub-passos para a mola ficar estável com dt variável
     let remaining = f.dt;
     while (remaining > 0) {
       const h = Math.min(remaining, 1 / 120);
-      const accel = 70 * (target - this.strafeX) - 11 * this.strafeV;
+      const accel = stiffness * (target - this.strafeX) - damping * this.strafeV;
       this.strafeV += accel * h;
       this.strafeX += this.strafeV * h;
       remaining -= h;
@@ -514,13 +559,21 @@ export class Viewmodel {
     this.rot.x -= this.swayY * 1.6;
   }
 
+  private readonly vmLights: { light: THREE.Light; base: number }[] = [];
+
+  /** Reduz a luz dos braços/arma em mapas escuros (1 = normal). */
+  setLightScale(k: number): void {
+    for (const l of this.vmLights) l.light.intensity = l.base * k;
+  }
+
   private setupLights(scene: THREE.Scene): void {
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x5a5f66, 1.6));
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x5a5f66, 1.6);
     const key = new THREE.DirectionalLight(0xfff4e6, 2.4);
     key.position.set(-0.6, 1.2, 0.6);
-    scene.add(key);
     const rim = new THREE.DirectionalLight(0xcfe0ff, 0.6);
     rim.position.set(1, 0.3, -1);
-    scene.add(rim);
+    scene.add(hemi, key, rim);
+    for (const light of [hemi, key, rim]) this.vmLights.push({ light, base: light.intensity });
   }
+
 }
