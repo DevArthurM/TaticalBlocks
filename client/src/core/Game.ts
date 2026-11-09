@@ -9,6 +9,8 @@ import { Debris } from '../physics/Debris';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { PlayerBody } from '../player/PlayerBody';
 import { DeathCam } from '../player/DeathCam';
+import { FloorTiles } from '../world/FloorTiles';
+import { BloodSystem } from '../effects/BloodSystem';
 import { type GameMode, MODES } from '@shared/net/protocol';
 import { MainMenu } from '../ui/main/MainMenu';
 import { type AttachmentSlot, encodeAttachments } from '@shared/weapons/attachments';
@@ -33,6 +35,10 @@ import { OnlineHud } from '../ui/online/OnlineHud';
 import { OnlineMenu } from '../ui/online/OnlineMenu';
 import { AttachmentEditor } from '../ui/attachments/AttachmentEditor';
 import { findWeapon } from '@shared/weapons/catalog';
+import { ATTACHMENTS } from '@shared/weapons/attachments';
+import { AMMO, ATTACHMENT_PRICE, killReward, MAX_SHOP_GRENADES, maxReserve, money, pvpAllowed } from '@shared/weapons/economy';
+import { Economy } from '../weapons/Economy';
+import { ShopMenu } from '../ui/shop/ShopMenu';
 import { ZombieInstancer } from '../enemies/zombie/ZombieInstancer';
 import { ZOMBIE_UNIT_BOX, zombieMaterials } from '../enemies/zombie/ZombieModel';
 import { Input, KEYS } from './Input';
@@ -47,7 +53,8 @@ const WARMUP_TIMEOUT_MS = 6000;
 /** Segundos segurando F por tábua pregada. */
 const REPAIR_TIME = 0.55;
 /** Offline: segundos caído no chão antes de renascer. */
-const RESPAWN_DELAY = 3;
+/** Solo: segundos com a câmera caída antes de voltar ao menu. */
+const GAME_OVER_DELAY = 5;
 
 /** Orquestra os sistemas e o loop principal. */
 /** sessionStorage: sala escolhida no menu principal, lida (e apagada) no próximo carregamento. */
@@ -103,10 +110,16 @@ export class Game {
   private spawn = new THREE.Vector3();
   private weapons!: WeaponManager;
   private particles!: ParticleSystem;
+  /** Piso de quadradinhos (cada um com cor própria) e sangue que mancha piso e voxels. */
+  private floor!: FloorTiles;
+  private blood!: BloodSystem;
   private explosions!: Explosions;
   private projectiles!: Projectiles;
   private hud!: HUD;
   private menu!: ArsenalWheel;
+  /** Modo zumbis (solo ou online): dinheiro e loja no lugar do arsenal livre. */
+  private economy: Economy | null = null;
+  private shop: ShopMenu | null = null;
   private settingsMenu!: SettingsMenu;
   private readonly settings = new SettingsStore();
   private catalog: readonly WeaponDef[] = [];
@@ -175,7 +188,19 @@ export class Game {
         return this.crates.hit(hit, dir, damage);
       },
       enemies: {
-        shoot: (o, d, far, dmg, meta) => (this.session ? this.session.shoot(o, d, far, dmg, meta) : this.zombies.shoot(o, d, far, dmg)),
+        shoot: (o, d, far, dmg, meta) => {
+          // online PvP: só jogadores; modo zumbis: aliados bloqueiam o tiro (sem dano) e os zumbis levam
+          if (this.session && !this.session.zombiesMode) return this.session.shoot(o, d, far, dmg, meta);
+          const ally = this.session?.shoot(o, d, far, dmg, meta) ?? null;
+          const hit = this.zombies.shoot(o, d, ally ? ally.distance : far, dmg);
+          if (!hit) return ally;
+          // acertou um zumbi vivo: marcador de acerto + estalo
+          if (hit && !hit.corpse) {
+            this.hud.hitMark(!!hit.head, !!hit.killed);
+            this.audio.play('hitmarker', hit.killed ? 0.9 : 0.6);
+          }
+          return hit;
+        },
       },
       onShot: (weapon, origin, dir, pellets) => this.session?.onShot(weapon, origin, dir, pellets),
     });
@@ -184,8 +209,11 @@ export class Game {
     this.spawn.set(map.data.spawn.x, map.data.spawn.y, map.data.spawn.z);
     // todos os zumbis desenhados por instância (~7 draw calls no total)
     const zombieInstances = new ZombieInstancer(this.gfx.scene, ZOMBIE_UNIT_BOX);
-    zombieInstances.prepare(this.onlineMode ? soldierMaterials() : zombieMaterials());
+    // online: soldados (e zumbis, no modo cooperativo)
+    zombieInstances.prepare(this.onlineMode ? [...soldierMaterials(), ...zombieMaterials()] : zombieMaterials());
     this.gfx.beforeRender = () => zombieInstances.sync();
+    this.floor = new FloorTiles(this.gfx.scene, map.data.size);
+    this.blood = new BloodSystem(this.gfx.scene, this.floor, (p, k) => this.destruction.stainAt(p, k));
     this.zombies = new ZombieDirector(
       this.gfx.scene,
       this.physics,
@@ -202,10 +230,12 @@ export class Game {
           this.audio.play('playerHurt', 0.6);
         },
         onWave: (wave, count) => this.hud.announce(`ONDA ${wave}`, `${count} ${count === 1 ? 'zumbi' : 'zumbis'}`),
+        onKilled: (kind, head) => this.economy?.earn(killReward(kind, head)),
       },
       map.data.size,
       this.barricades,
     );
+    this.zombies.blood = this.blood;
     this.weapons.viewmodel.setLightScale(world.env.viewmodelLight);
     this.hud.setOnlineMode(this.onlineMode);
     // sair da partida: volta ao menu principal (online: desconecta; solo: recomeça do zero)
@@ -241,6 +271,8 @@ export class Game {
     this.attachMenu.onPreview = (att) => this.weapons.previewAttachments(att);
     this.attachMenu.onClose = () => this.setCustomizeOpen(false);
     this.weapons.onCustomizeRequest = () => this.setCustomizeOpen(true);
+    // solo é sempre o modo zumbis: começa com $0 e só a faca
+    if (!this.onlineMode) this.enableZombieEconomy();
     this.settingsMenu = new SettingsMenu(this.container, this.settings);
     this.settingsMenu.onClose = () => this.setSettingsOpen(false);
     this.hud.onOpenSettings = () => this.setSettingsOpen(true);
@@ -281,10 +313,11 @@ export class Game {
 
     this.input.onLockChange((locked) => {
       if (locked) this.settingsMenu.setOpen(false);
-      this.hud.setPaused(!locked && !this.menu.isOpen && !this.settingsMenu.isOpen && !this.attachMenu.isOpen && !this.mainMenu?.isOpen);
+      this.hud.setPaused(!locked && !this.menu.isOpen && !this.shop?.isOpen && !this.settingsMenu.isOpen && !this.attachMenu.isOpen && !this.mainMenu?.isOpen);
       if (locked) {
         this.audio.unlock();
         this.menu.setOpen(false);
+        this.shop?.setOpen(false);
       }
     });
     // menu T aberto e o jogo perde o foco (troca de janela/aba): volta ao modo de combate
@@ -299,7 +332,7 @@ export class Game {
     // B também precisa funcionar com o menu aberto (sem pointer lock)
     window.addEventListener('keydown', (e) => {
       if ((e.code === KEYS.customize || e.code === 'Escape') && this.attachMenu.isOpen) this.setCustomizeOpen(false);
-      else if ((e.code === KEYS.loadout || e.code === 'Escape') && this.menu.isOpen) this.toggleMenu();
+      else if ((e.code === KEYS.loadout || e.code === 'Escape') && (this.menu.isOpen || this.shop?.isOpen)) this.toggleMenu();
       else if (e.code === 'Escape' && this.settingsMenu.isOpen) this.setSettingsOpen(false);
     });
 
@@ -347,6 +380,15 @@ export class Game {
   }
 
   private toggleMenu(): void {
+    if (this.shop) {
+      const open = !this.shop.isOpen;
+      this.shop.setOpen(open);
+      if (open) {
+        document.exitPointerLock();
+        this.hud.setPaused(false);
+      } else void this.gfx.canvas.requestPointerLock();
+      return;
+    }
     if (this.forcedLoadout && !this.menu.isOpen) {
       this.hud.announce('GUN GAME', 'a arma é definida pelo seu nível');
       return;
@@ -399,8 +441,10 @@ export class Game {
     if (!dead) this.updateFootsteps(dt);
     this.crates.push(this.player.position, 0.35, 1.7, this.player.pushVelocity);
     if (!dead && !inMenu) this.weapons.update(dt, this.time, this.input);
-    if (this.session) this.session.update(dt, this.input.isDown('Tab'));
-    else if (!inMenu) {
+    if (this.session) {
+      this.session.update(dt, this.input.isDown('Tab'));
+      if (this.session.zombiesMode) this.updateOnlineZombies(dt);
+    } else if (!inMenu) {
       this.zombies.update(dt);
       this.checkDeath(dt);
     }
@@ -412,6 +456,7 @@ export class Game {
     this.deathCam.update(dt);
     this.explosions.update(dt, this.time);
     this.particles.update(dt);
+    this.blood.update(dt);
     this.world.env.update(dt, this.time, this.gfx.camera.position);
     this.barricades?.update(dt);
 
@@ -424,16 +469,38 @@ export class Game {
       this.player.ledgePhase === 'hang' ? '<kbd>W</kbd> escalar · solte <kbd>Espaço</kbd> para cair' : repairPrompt,
     );
     this.updateHud(dt);
+    if (this.economy) {
+      // modo zumbis: munição limitada aparece no canto
+      const item = this.weapons.held;
+      this.hud.setAmmo(
+        item?.kind === 'firearm' ? `${item.gun.ammo} / ${item.gun.reserve}` : item?.kind === 'throwable' ? `${this.weapons.inventory.grenades}×` : '',
+      );
+    }
     if (this.attachMenu.isOpen) this.updateAttachmentEditor();
     // com o menu principal aberto o jogo fica escondido: nem desenha
     if (!this.mainMenu?.isOpen) this.gfx.render();
     this.input.endFrame();
   };
 
+  /** Modo zumbis online: o anfitrião simula; os outros espelham (o diretor decide pelo `net`). */
+  private updateOnlineZombies(dt: number): void {
+    const s = this.session!;
+    // contagem 3-2-1 / aquecimento: sem zumbis
+    if (s.frozen) return;
+    this.zombies.update(dt);
+    if (s.isHost) {
+      this.onlineHud!.zombieWave = this.zombies.wave;
+      this.onlineHud!.zombiesLeft = this.zombies.alive;
+    }
+  }
+
+  private onlineHud: OnlineHud | null = null;
+
   /** Modo online: menu de salas, conexão e sessão de partida. */
   private setupOnline(decals: Decals): void {
     const net = new NetClient();
     const hud = new OnlineHud(this.container);
+    this.onlineHud = hud;
     const menu = new OnlineMenu(this.container);
     this.player.regen = false;
     this.session = new OnlineSession({
@@ -454,7 +521,26 @@ export class Game {
     // Gun Game: troca a arma na mão pela do nível (loadout só local, não é salvo)
     this.session.onHurtFrom = (x, z) => this.hud.damageFrom(x, z);
     // nova partida (3-2-1): o mapa volta inteiro, sem buracos nem detritos
-    this.session.onRestart = () => this.destruction.reset();
+    this.session.onRestart = () => {
+      this.zombies.reset();
+      this.destruction.reset();
+      this.floor.reset();
+      this.blood.clear();
+    };
+    // modo zumbis: o diretor passa a falar com a rede
+    this.session.attachZombies(this.zombies);
+    this.zombies.onKillBy = (by) => {
+      if (by !== this.session?.myId) return;
+      this.hud.hitMark(false, true);
+      this.audio.play('hitmarker', 0.9);
+    };
+    this.session.onHitMark = (head, kill) => this.hud.hitMark(head, kill);
+    // zumbis: todos morreram → fim de jogo e volta ao menu principal
+    this.session.onGameOver = () => {
+      this.shop?.setOpen(false);
+      setTimeout(() => (location.href = location.pathname), 6000);
+    };
+    this.session.onBecameHost = () => this.hud.announce('ANFITRIÃO', 'você agora controla os zumbis da sala');
     this.session.onForcedWeapon = (weapon, level, demoted) => {
       this.forcedLoadout = true;
       const def = findWeapon(weapon);
@@ -472,6 +558,10 @@ export class Game {
     net.on('error', ({ message }) => menu.setStatus(message, true));
     net.on('joined', (j) => {
       this.session!.start(j);
+      if (j.room.mode === 'zombies') {
+        this.enableZombieEconomy();
+        this.economy!.setMoney(j.you.money ?? 0);
+      } else if (j.room.mode !== 'gungame') this.restrictPvp();
       menu.setOpen(false);
       menu.setStatus('');
       this.hud.setStatus(`${j.room.name} · ${j.room.mode}`, 'server');
@@ -599,18 +689,93 @@ export class Game {
       return;
     }
     if (this.player.health > 0) return;
-    this.respawnTimer = RESPAWN_DELAY;
+    this.respawnTimer = GAME_OVER_DELAY;
     this.audio.play('playerHurt', 1);
-    this.hud.announce('VOCÊ MORREU', 'as ondas recomeçam');
+    this.hud.announce('FIM DE JOGO', `você sobreviveu até a onda ${this.zombies.wave}`);
+    this.shop?.setOpen(false);
   }
 
+  /** Solo: morreu = fim de jogo; volta ao menu principal (partida nova do zero). */
   private respawnOffline(): void {
-    this.respawnTimer = 0;
-    this.player.position.copy(this.spawn);
-    this.player.velocity.set(0, 0, 0);
-    this.player.health = 100;
-    this.player.hurt = 1;
-    this.zombies.reset();
+    location.href = location.pathname;
+  }
+
+  /**
+   * Modo zumbis: começa com $0 e só a faca; matar zumbis dá dinheiro e o B abre a
+   * loja (armas, munição, granadas e acessórios). Munição limitada por arma.
+   */
+  private enableZombieEconomy(): void {
+    if (this.economy) return;
+    const eco = new Economy();
+    this.economy = eco;
+    const w = this.weapons;
+    w.enableZombieMode();
+    w.setLoadout({ primary: null, secondary: null, melee: 'knife', grenade: { type: null, count: 0 } });
+    w.equip('melee', true);
+    // muda o loadout sem salvar (mantém a contagem atual de granadas)
+    const setLo = (change: Partial<Loadout>) => {
+      const lo = w.inventory.loadout;
+      w.setLoadout({ ...lo, grenade: { type: lo.grenade.type, count: w.inventory.grenades }, ...change });
+    };
+    this.shop = new ShopMenu(this.container, this.catalog, {
+      economy: eco,
+      loadout: () => w.inventory.loadout,
+      grenades: () => w.inventory.grenades,
+      ammo: (def) => {
+        const g = w.inventory.firearm(def);
+        return { mag: g.ammo, reserve: g.reserve, max: maxReserve(def) };
+      },
+      attachments: (id) => w.attachmentStore.get(id),
+      takeWeapon: async (def) => {
+        if (!eco.ownsWeapon(def.id) && !(await eco.buy(`w:${def.id}`))) return;
+        const slot = def.slot === 'secondary' ? 'secondary' : def.slot === 'melee' ? 'melee' : 'primary';
+        setLo({ [slot]: def.id });
+        w.equip(slot, true);
+      },
+      buyAmmo: async (def) => {
+        if (await eco.buy(`m:${def.id}`)) w.addAmmo(def, AMMO.packMags);
+      },
+      buyGrenade: async (def) => {
+        const lo = w.inventory.loadout;
+        const count = lo.grenade.type === def.id ? w.inventory.grenades : 0;
+        if (count >= MAX_SHOP_GRENADES || !(await eco.buy(`g:${def.id}`))) return;
+        setLo({ grenade: { type: def.id, count: count + 1 } });
+      },
+      toggleAttachment: async (def, att) => {
+        if (!eco.ownsAttachment(def.id, att) && !(await eco.buy(`a:${def.id}:${att}`))) return;
+        const cur = { ...w.attachmentStore.get(def.id) };
+        const slot = ATTACHMENTS[att].slot;
+        if (cur[slot] === att) delete cur[slot];
+        else cur[slot] = att;
+        w.setAttachments(def.id, cur);
+      },
+    });
+    eco.onChange = () => {
+      this.hud.setMoney(money(eco.money));
+      this.shop?.refresh();
+    };
+    eco.onEarn = (n) => this.hud.earn(`+${money(n)}`);
+    this.hud.setMoney(money(eco.money));
+    // T: acessório ainda não comprado mostra o preço e compra ao escolher
+    this.attachMenu.priceOf = (wid, att) => (eco.ownsAttachment(wid, att) ? null : ATTACHMENT_PRICE[att]);
+    this.attachMenu.onBuy = (wid, att) => eco.buy(`a:${wid}:${att}`);
+    // online: o servidor guarda o saldo
+    if (this.session) {
+      const s = this.session;
+      eco.remote = (item) => s.buy(item);
+      s.onMoney = (m) => eco.setMoney(m);
+    }
+  }
+
+  /** PvP: sem armas pesadas nem granadas (o Gun Game impõe a arma). */
+  private restrictPvp(): void {
+    const allowed = this.catalog.filter((d) => pvpAllowed(d));
+    this.menu.setCatalog(allowed);
+    const lo = this.weapons.inventory.loadout;
+    const primary = lo.primary && pvpAllowed(findWeapon(lo.primary)) ? lo.primary : 'm4a1';
+    const next: Loadout = { ...lo, primary, grenade: { type: null, count: 0 } };
+    this.weapons.setLoadout(next);
+    this.menu.setLoadout(next);
   }
 
   /** 0..1 — quanto tempo o jogador está parado mirando (fecha o túnel de foco). */

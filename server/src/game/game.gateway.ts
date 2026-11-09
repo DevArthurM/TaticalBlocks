@@ -1,6 +1,6 @@
 import { ConnectedSocket, MessageBody, type OnGatewayConnection, type OnGatewayDisconnect, SubscribeMessage, WebSocketGateway } from '@nestjs/websockets';
 import type { WebSocket } from 'ws';
-import { NET } from '../../../shared/net/protocol';
+import { NET, ZOMBIE_FIELDS } from '../../../shared/net/protocol';
 import { RoomsService } from './rooms.service';
 import { isNum, playerState, shortString, unitVec, vec } from './validate';
 
@@ -102,5 +102,58 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const pos = vec(d?.pos);
     if (!s?.room || !s.player || !pos || !isNum(d?.id)) return;
     s.room.onExplode(s.player, { id: d.id as number, pos });
+  }
+
+  // ───────────── modo zumbis ─────────────
+
+  @SubscribeMessage('zsync')
+  zsync(@ConnectedSocket() socket: WebSocket, @MessageBody() d: Body): void {
+    const s = this.rooms.session(socket);
+    const z = d?.z;
+    if (!s?.room || !s.player || !isNum(d?.wave, 1e4) || !Array.isArray(z) || z.length > ZOMBIE_FIELDS * 80) return;
+    if (!z.every((v) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < 1e6)) return;
+    s.room.onZSync(s.player, { wave: d.wave as number, z: z as number[] });
+  }
+
+  @SubscribeMessage('zev')
+  zev(@ConnectedSocket() socket: WebSocket, @MessageBody() d: Body): void {
+    const s = this.rooms.session(socket);
+    if (!s?.room || !s.player || !d) return;
+    if (d.type === 'kill') {
+      const point = vec(d.point);
+      const impulse = vec(d.impulse, 1e4);
+      if (!isNum(d.id) || !shortString(d.bone, 16) || !point || !impulse || typeof d.by !== 'string' || d.by.length > 32 || !isNum(d.kind, 2)) return;
+      s.room.onZEvent(s.player, { type: 'kill', id: d.id as number, bone: d.bone as string, point, impulse, by: d.by, kind: Math.max(0, Math.floor(d.kind as number)), head: d.head === true });
+    } else if (d.type === 'sever') {
+      const dir = vec(d.dir, 10);
+      if (!isNum(d.id) || !shortString(d.part, 16) || !shortString(d.side, 2) || !dir) return;
+      s.room.onZEvent(s.player, { type: 'sever', id: d.id as number, part: d.part as string, side: d.side as string, dir, hang: d.hang === true });
+    } else if (d.type === 'wave') {
+      if (!isNum(d.wave, 1e4) || !isNum(d.count, 1e4)) return;
+      s.room.onZEvent(s.player, { type: 'wave', wave: d.wave as number, count: d.count as number });
+    }
+  }
+
+  @SubscribeMessage('buy')
+  buy(@ConnectedSocket() socket: WebSocket, @MessageBody() d: Body): void {
+    const s = this.rooms.session(socket);
+    if (s?.room && s.player && shortString(d?.item, 48)) s.room.onBuy(s.player, d.item as string);
+  }
+
+  @SubscribeMessage('zatk')
+  zatk(@ConnectedSocket() socket: WebSocket, @MessageBody() d: Body): void {
+    const s = this.rooms.session(socket);
+    const from = vec(d?.from);
+    if (!s?.room || !s.player || !from || !shortString(d?.target) || !isNum(d?.damage, 200)) return;
+    s.room.onZAttack(s.player, { target: d.target as string, damage: d.damage as number, from });
+  }
+
+  @SubscribeMessage('zhit')
+  zhit(@ConnectedSocket() socket: WebSocket, @MessageBody() d: Body): void {
+    const s = this.rooms.session(socket);
+    const point = vec(d?.point);
+    const dir = unitVec(d?.dir);
+    if (!s?.room || !s.player || !point || !dir || !isNum(d?.id) || !isNum(d?.mesh, 64) || !isNum(d?.damage, 2000)) return;
+    s.room.onZHit(s.player, { id: d.id as number, mesh: Math.floor(d.mesh as number), damage: d.damage as number, point, dir });
   }
 }

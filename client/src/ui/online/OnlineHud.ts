@@ -24,6 +24,10 @@ export class OnlineHud {
   /** Modo por times (placar Verde × Azul) ou cada um por si (líder × você). */
   teams = true;
   gungame = false;
+  /** Modo zumbis (cooperativo): onda e zumbis restantes no placar. */
+  zombies = false;
+  zombieWave = 0;
+  zombiesLeft = 0;
   myId = '';
   /** Valor do jogador local (abates ou nível) para o placar. */
   myValue = 0;
@@ -82,7 +86,12 @@ export class OnlineHud {
     let kind = '';
     let title = '';
     let sub = '';
-    if (m.phase === 'ended') {
+    if (m.phase === 'ended' && this.zombies) {
+      // modo zumbis: todos morreram
+      kind = 'lose';
+      title = 'FIM DE JOGO';
+      sub = `vocês sobreviveram até a onda ${this.zombieWave} · voltando ao menu…`;
+    } else if (m.phase === 'ended') {
       const won = this.teams ? m.winner !== 'draw' && m.winner === this.myTeam : m.winnerId === this.myId;
       const draw = this.teams ? m.winner === 'draw' : !m.winnerId;
       kind = draw ? 'draw' : won ? 'win' : 'lose';
@@ -143,6 +152,10 @@ export class OnlineHud {
         // cada um por si: líder × você
         const unit = this.gungame ? 'nível' : 'abates';
         note = this.gungame ? `termine com a faca (${m.scoreLimit} níveis)` : `primeiro a ${m.scoreLimit}`;
+        if (this.zombies) {
+          center = this.zombieWave ? `ONDA ${this.zombieWave}` : 'PREPARANDO';
+          note = `${this.zombiesLeft} ${this.zombiesLeft === 1 ? 'zumbi' : 'zumbis'}`;
+        }
         if (m.phase === 'warmup') {
           center = 'AQUECIMENTO';
           note = 'aguardando mais jogadores';
@@ -200,7 +213,7 @@ export class OnlineHud {
     const name = (p?: PlayerInfo) => (p ? `<b class="${p.team}">${esc(p.name)}</b>` : '<b>?</b>');
     const wname = findWeapon(weapon)?.name ?? weapon;
     const head = zone === 'head' ? ' <em>na cabeça</em>' : '';
-    row.innerHTML = killer?.id === victim?.id ? `${name(victim)} <span>se matou</span>` : `${name(killer)} <span>[${esc(wname)}]</span> ${name(victim)}${head}`;
+    row.innerHTML = weapon === 'zombie' ? `${name(victim)} <span>foi devorado</span>` : killer?.id === victim?.id ? `${name(victim)} <span>se matou</span>` : `${name(killer)} <span>[${esc(wname)}]</span> ${name(victim)}${head}`;
     this.feed.prepend(row);
     setTimeout(() => row.classList.add('fade'), 5000);
     setTimeout(() => row.remove(), 5600);
@@ -208,11 +221,13 @@ export class OnlineHud {
   }
 
   /** Tela de morte com contagem regressiva. */
-  showDeath(by: PlayerInfo | undefined, weapon: string, zone: string, seconds: number): void {
+  /** `seconds` null: modo zumbis (renasce no começo da próxima onda). */
+  showDeath(by: PlayerInfo | undefined, weapon: string, zone: string, seconds: number | null): void {
     const wname = findWeapon(weapon)?.name ?? weapon;
     const where = PLAYER_ZONE_LABEL[zone as PlayerZone] ?? zone;
-    this.death.innerHTML = `<b>ABATIDO</b><span>${by ? `por <b class="${by.team}">${esc(by.name)}</b> · ${esc(wname)} · ${where}` : ''}</span><small>renascendo em <i>${seconds}</i></small>`;
+    this.death.innerHTML = `<b>ABATIDO</b><span>${by ? `por <b class="${by.team}">${esc(by.name)}</b> · ${esc(wname)} · ${where}` : weapon === 'zombie' ? 'pelos zumbis' : ''}</span><small>${seconds === null ? 'você volta na próxima onda' : `renascendo em <i>${seconds}</i>`}</small>`;
     this.death.classList.remove('hidden');
+    if (seconds === null) return;
     let left = seconds;
     const timer = setInterval(() => {
       left--;
@@ -232,15 +247,15 @@ export class OnlineHud {
     if (!open) return;
     if (!this.teams) {
       // cada um por si: uma lista só, por nível (Gun Game) ou abates
-      const list = [...players].sort((a, b) => (this.gungame ? (b.level ?? 0) - (a.level ?? 0) : 0) || b.kills - a.kills || a.deaths - b.deaths);
-      const head = this.gungame ? '<th>Nível</th><th>A</th><th>M</th>' : '<th>A</th><th>M</th>';
+      const list = [...players].sort((a, b) => (this.gungame ? (b.level ?? 0) - (a.level ?? 0) : 0) || (this.zombies ? (b.money ?? 0) - (a.money ?? 0) : 0) || b.kills - a.kills || a.deaths - b.deaths);
+      const head = this.gungame ? '<th>Nível</th><th>A</th><th>M</th>' : this.zombies ? '<th>Dinheiro</th><th>A</th><th>M</th>' : '<th>A</th><th>M</th>';
       const rows = list
         .map(
           (p, i) =>
-            `<tr class="${p.id === myId ? 'me' : ''}${p.alive ? '' : ' dead'}"><td>${i + 1}. ${esc(p.name)}</td>${this.gungame ? `<td>${(p.level ?? 0) + 1}</td>` : ''}<td>${p.kills}</td><td>${p.deaths}</td></tr>`,
+            `<tr class="${p.id === myId ? 'me' : ''}${p.alive ? '' : ' dead'}"><td>${i + 1}. ${esc(p.name)}</td>${this.gungame ? `<td>${(p.level ?? 0) + 1}</td>` : ''}${this.zombies ? `<td class="money">$${(p.money ?? 0).toLocaleString('pt-BR')}</td>` : ''}<td>${p.kills}</td><td>${p.deaths}</td></tr>`,
         )
         .join('');
-      this.board.innerHTML = `<div class="cols single"><div class="col"><h4>${this.gungame ? 'Gun Game' : '1 contra todos'}</h4><table><tr><th>Jogador</th>${head}</tr>${rows}</table></div></div><p>ping ${this.ping} ms</p>`;
+      this.board.innerHTML = `<div class="cols single"><div class="col"><h4>${this.gungame ? 'Gun Game' : this.zombies ? 'Zumbis (cooperativo)' : '1 contra todos'}</h4><table><tr><th>Jogador</th>${head}</tr>${rows}</table></div></div><p>ping ${this.ping} ms</p>`;
       return;
     }
     const col = (team: TeamId) => {

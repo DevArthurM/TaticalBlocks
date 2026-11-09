@@ -125,3 +125,4 @@ export function createCrateTexture(): THREE.Texture {
   return tex;
 }
 
+

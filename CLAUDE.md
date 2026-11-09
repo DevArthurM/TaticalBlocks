@@ -11,7 +11,7 @@ Guia para trabalhar neste repositório. O `README.md` traz a documentação para
 - **Destruição:** voxels destrutíveis, detritos com física e decalques.
 - **Zumbis:** ondas de inimigos com variantes procedurais de roupa e pele, dano por parte do corpo e ragdoll.
 - **Movimento:** corrida, agachar, deslize (Shift + C), inclinar (Q/E), escalar quinas e recuo que sobe a câmera.
-- **Online (PvP):** salas 1v1, 5v5, 10v10, 1 contra todos e Gun Game, com servidor autoritativo em WebSocket.
+- **Online:** salas 1v1, 5v5, 10v10, 1 contra todos, Gun Game e Zumbis cooperativo (até 5), com servidor autoritativo em WebSocket.
 
 Toda a interface, os comentários e os textos do jogo estão em **português**. Mantenha esse padrão.
 
@@ -101,6 +101,7 @@ Aliases: o cliente importa `@shared/...` (alias do Vite e do tsconfig). O servid
   - O servidor valida os disparos (registro de tiros, cadência pelo rpm, pellets, alcance, time, arma do Gun Game) e calcula o dano como dano da arma × multiplicador da zona.
 - **Conexões mortas:** o cliente envia heartbeat a cada 3 s e o servidor encerra conexões ociosas após 10 s. O servidor também limita a 120 mensagens/s por sessão.
 - **Modos:** definidos em `MODES` (`protocol.ts`). Fogo amigo só existe nos modos com times. O Gun Game usa `GUNGAME_LADDER`: abate de faca rebaixa a vítima, e matar com a faca no último nível vence.
+- **Zumbis online:** um jogador (anfitrião, trocado se sair) roda o `ZombieDirector` e envia `zsync` (estado compacto, `ZOMBIE_FIELDS`) e `zev`; os outros espelham (`Zombie.puppetUpdate`) e mandam acertos por `zhit` (índice da malha). Golpes dos zumbis viram `zatk` e o servidor aplica o dano.
 
 ## Convenções
 

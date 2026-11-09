@@ -25,7 +25,7 @@ export const NET = {
   maxNameLength: 16,
 } as const;
 
-export type GameMode = '1v1' | '5v5' | '10v10' | 'ffa' | 'gungame';
+export type GameMode = '1v1' | '5v5' | '10v10' | 'ffa' | 'gungame' | 'zombies';
 export type TeamId = 'green' | 'blue';
 
 /**
@@ -44,7 +44,38 @@ export const MODES: Record<GameMode, { teams: boolean; max: number; scoreLimit: 
   '10v10': { teams: true, max: 20, scoreLimit: 75, label: '10 contra 10', short: '10v10' },
   ffa: { teams: false, max: 12, scoreLimit: 20, label: '1 contra todos', short: '1×Todos' },
   gungame: { teams: false, max: 12, scoreLimit: GUNGAME_LADDER.length, label: 'Gun Game', short: 'Gun Game' },
+  // cooperativo contra ondas de zumbis (sem fogo amigo, sem fim de partida)
+  zombies: { teams: false, max: 5, scoreLimit: 0, label: 'Zumbis (cooperativo)', short: 'Zumbis' },
 };
+
+/**
+ * Modo zumbis: o anfitrião (um dos jogadores) simula os zumbis e manda o estado
+ * compacto — por zumbi, `ZOMBIE_FIELDS` números seguidos em `z`:
+ * id, x, z, yaw, estado (bit 1 rasteja, bit 2 golpeando), tipo (0 comum, 1 corredor, 2 forte),
+ * roupa, pele, máscara de partes arrancadas (`SEVER_BITS`).
+ */
+export const ZOMBIE_FIELDS = 9;
+/** Bit de cada parte arrancável (`parte:lado`) na máscara do estado dos zumbis. */
+export const SEVER_BITS: readonly string[] = [
+  'head:C',
+  'upperArm:L',
+  'upperArm:R',
+  'forearm:L',
+  'forearm:R',
+  'hand:L',
+  'hand:R',
+  'thigh:L',
+  'thigh:R',
+  'shin:L',
+  'shin:R',
+  'foot:L',
+  'foot:R',
+];
+/** Eventos dos zumbis (anfitrião → todos). */
+export type ZombieEvent =
+  | { type: 'kill'; id: number; bone: string; point: Vec3Tuple; impulse: Vec3Tuple; by: string; kind: number; head: boolean }
+  | { type: 'sever'; id: number; part: string; side: string; dir: Vec3Tuple; hang: boolean }
+  | { type: 'wave'; wave: number; count: number };
 
 export const TEAM_LABEL: Record<TeamId, string> = { green: 'Verde', blue: 'Azul' };
 
@@ -93,6 +124,8 @@ export interface PlayerInfo {
   hp: number;
   /** Gun Game: índice na escada de armas. */
   level?: number;
+  /** Modo zumbis: dinheiro (tabela do Tab). */
+  money?: number;
 }
 
 export interface MatchInfo {
@@ -135,6 +168,16 @@ export interface ClientEvents {
   projectile: { id: number; weapon: string; kind: 'launch' | 'throw'; origin: Vec3Tuple; vel: Vec3Tuple; fuse: number | null };
   /** O projétil do próprio jogador detonou (o servidor calcula o dano). */
   explode: { id: number; pos: Vec3Tuple };
+  /** Modo zumbis — anfitrião: estado de todos os zumbis (ver `ZOMBIE_FIELDS`). */
+  zsync: { wave: number; z: number[] };
+  /** Modo zumbis — anfitrião: morte/membro arrancado/nova onda. */
+  zev: ZombieEvent;
+  /** Modo zumbis — anfitrião: um zumbi acertou um jogador. */
+  zatk: { target: string; damage: number; from: Vec3Tuple };
+  /** Modo zumbis: compra na loja (ver `itemPrice` em `shared/weapons/economy.ts`). */
+  buy: { item: string };
+  /** Modo zumbis — qualquer jogador: acertou a peça `mesh` (índice) de um zumbi (o anfitrião aplica o dano). */
+  zhit: { id: number; mesh: number; damage: number; point: Vec3Tuple; dir: Vec3Tuple };
   ping: { t: number };
 }
 
@@ -142,7 +185,7 @@ export interface ClientEvents {
 export interface ServerEvents {
   welcome: { id: string; name: string };
   rooms: { rooms: RoomInfo[] };
-  joined: { room: RoomInfo; you: PlayerInfo; players: PlayerInfo[]; match: MatchInfo; spawn: { p: Vec3Tuple; yaw: number } };
+  joined: { room: RoomInfo; you: PlayerInfo; players: PlayerInfo[]; match: MatchInfo; spawn: { p: Vec3Tuple; yaw: number }; host?: string };
   playerJoined: { player: PlayerInfo };
   playerLeft: { id: string };
   /** `t`: tempo do servidor (s). */
@@ -158,6 +201,14 @@ export interface ServerEvents {
   pong: { t: number; server: number };
   /** Gun Game: nível e arma do jogador (o cliente troca a arma na mão). */
   gungame: { level: number; weapon: string; next: string | null; demoted?: boolean };
+  /** Modo zumbis: resultado da compra e saldo atual. */
+  bought: { item: string; ok: boolean; money: number };
+  /** Modo zumbis: quem simula os zumbis agora. */
+  host: { id: string };
+  zsync: { wave: number; z: number[] };
+  zev: ZombieEvent;
+  /** Para o anfitrião: tiro de outro jogador num zumbi. */
+  zhit: { by: string; id: number; mesh: number; damage: number; point: Vec3Tuple; dir: Vec3Tuple };
   error: { message: string };
 }
 

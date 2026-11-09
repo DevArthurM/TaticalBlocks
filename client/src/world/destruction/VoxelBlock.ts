@@ -144,8 +144,34 @@ export class VoxelBlock {
     return mesh;
   }
 
-  /** Volta ao bloco inteiro (nova partida): todos os voxels de volta, vida cheia. */
+  /** Cores originais (para limpar manchas de sangue). */
+  private baseColors: THREE.Color[] | null = null;
+  private colorsDirty = false;
+
+  /** Sangue encostou no voxel `i`: a cor puxa para o vermelho (`amount` 0..1). */
+  stain(i: number, amount: number, blood: THREE.Color): void {
+    this.baseColors ??= this.colors.map((c) => c.clone());
+    this.colors[i].lerp(blood, amount);
+    this.instanced?.setColorAt(i, this.colors[i]);
+    this.colorsDirty = true;
+  }
+
+  /** Envia as cores manchadas (uma vez por quadro). */
+  flushColors(): void {
+    if (!this.colorsDirty || !this.instanced?.instanceColor) return;
+    this.instanced.instanceColor.needsUpdate = true;
+    this.colorsDirty = false;
+  }
+
+  /** Volta ao bloco inteiro (nova partida): todos os voxels de volta, vida cheia, sem manchas. */
   reset(): void {
+    if (this.baseColors) {
+      this.baseColors.forEach((c, i) => {
+        this.colors[i].copy(c);
+        this.instanced?.setColorAt(i, c);
+      });
+      this.colorsDirty = true;
+    }
     this.solid.fill(1);
     this.hp.fill(this.material.hp);
     this.alive = this.solid.length;

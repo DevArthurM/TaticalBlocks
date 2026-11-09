@@ -21,9 +21,11 @@ import {
   type ServerEvents,
   type TeamId,
   type Vec3Tuple,
+  type ZombieEvent,
 } from '../../../shared/net/protocol';
 import { TEAM_SPAWNS } from '../../../shared/net/spawns';
 import { findWeapon } from '../../../shared/weapons/catalog';
+import { itemPrice, killReward, pvpAllowed, START_MONEY } from '../../../shared/weapons/economy';
 import { dist } from './validate';
 
 /** Não renasce a menos disto de um inimigo vivo (se houver ponto livre). */
@@ -48,6 +50,8 @@ export interface ServerPlayer {
   shots: Map<number, { weapon: string; t: number; pellets: number; hits: number }>;
   /** Gun Game: posição na escada de armas. */
   level: number;
+  /** Modo zumbis: dinheiro. */
+  money: number;
   projectiles: Map<number, { weapon: string; t: number; origin: Vec3Tuple; done: boolean }>;
 }
 
@@ -91,6 +95,19 @@ export class Room {
     return this.mode === 'gungame';
   }
 
+  /** Modo zumbis (cooperativo): um jogador simula os zumbis (o anfitrião). */
+  get zombies(): boolean {
+    return this.mode === 'zombies';
+  }
+
+  /** Modo zumbis: id do jogador que simula os zumbis. */
+  private hostId: string | null = null;
+
+  private setHost(id: string | null): void {
+    this.hostId = id;
+    if (id) this.broadcast('host', { id });
+  }
+
   get full(): boolean {
     return this.players.size >= this.max;
   }
@@ -124,10 +141,12 @@ export class Room {
       shots: new Map(),
       projectiles: new Map(),
       level: 0,
+      money: START_MONEY,
     };
     const spawn = this.pickSpawn(p);
     p.state = { p: spawn.p, v: [0, 0, 0], yaw: spawn.yaw, pitch: 0, lean: 0, crouch: 0, flags: 8, weapon: null };
     this.players.set(id, p);
+    if (this.zombies && !this.hostId) this.hostId = id;
     this.broadcast('playerJoined', { player: this.playerInfo(p) }, id);
     this.send(p, 'joined', {
       room: this.info,
@@ -135,6 +154,7 @@ export class Room {
       players: [...this.players.values()].map((x) => this.playerInfo(x)),
       match: this.matchInfo(),
       spawn,
+      host: this.hostId ?? undefined,
     });
     this.sendLevel(p);
     this.checkTeams();
@@ -144,6 +164,9 @@ export class Room {
   remove(id: string): void {
     if (!this.players.delete(id)) return;
     this.broadcast('playerLeft', { id });
+    // o anfitrião saiu: outro jogador assume a simulação dos zumbis
+    if (this.zombies && this.hostId === id) this.setHost(this.players.keys().next().value ?? null);
+    if (this.zombies) this.checkWipe();
     this.checkTeams();
   }
 
@@ -163,6 +186,8 @@ export class Room {
       return;
     }
     if (!p.alive || def?.kind !== 'firearm' || def.projectile) return;
+    // PvP: armas pesadas ficam de fora (o Gun Game impõe a arma do nível)
+    if (!this.zombies && !this.gungame && !pvpAllowed(def)) return;
     // Gun Game: só a arma do nível atual
     if (this.gungame && def.id !== GUNGAME_LADDER[p.level]) return;
     // cadência: aceita até ~40% mais rápido que o rpm (variação de rede)
@@ -174,6 +199,7 @@ export class Room {
   }
 
   onHit(p: ServerPlayer, d: { shot: number; weapon: string; target: string; zone: string; point: Vec3Tuple }): void {
+    if (this.zombies) return; // cooperativo: sem fogo amigo
     const target = this.players.get(d.target);
     if (!p.alive || !target || !target.alive || target === p || !isPlayerZone(d.zone) || !p.state || !target.state) return;
     const def = findWeapon(d.weapon);
@@ -197,6 +223,64 @@ export class Room {
     this.damage(target, p, damage * PLAYER_ZONE_MULTIPLIER[d.zone], d.zone, def.id, d.point, this.dirBetween(p, target));
   }
 
+  // ───────────── modo zumbis ─────────────
+
+  /** Anfitrião: estado dos zumbis → demais jogadores. */
+  onZSync(p: ServerPlayer, d: { wave: number; z: number[] }): void {
+    if (!this.zombies || p.id !== this.hostId) return;
+    this.broadcast('zsync', d, p.id);
+  }
+
+  /** Anfitrião: morte/membro/onda → demais; morte com autor soma abate e dinheiro. */
+  onZEvent(p: ServerPlayer, d: ZombieEvent): void {
+    if (!this.zombies || p.id !== this.hostId) return;
+    this.broadcast('zev', d, p.id);
+    if (d.type === 'kill' && d.by) {
+      const killer = this.players.get(d.by);
+      if (killer) {
+        killer.kills++;
+        killer.money += killReward(d.kind, d.head);
+        this.broadcast('scores', { players: [...this.players.values()].map((x) => this.playerInfo(x)) });
+      }
+    }
+    // nova onda: quem morreu na anterior renasce
+    if (d.type === 'wave' && this.phase === 'playing') for (const x of this.players.values()) if (!x.alive) this.respawn(x);
+  }
+
+  /** Zumbis: todos mortos ao mesmo tempo = fim de jogo. */
+  private checkWipe(): void {
+    if (this.phase !== 'playing' || !this.players.size) return this.broadcastMatch();
+    if ([...this.players.values()].every((x) => !x.alive)) this.endMatch('draw');
+    else this.broadcastMatch();
+  }
+
+  /** Zumbis: compra na loja (o servidor guarda o saldo). */
+  onBuy(p: ServerPlayer, item: string): void {
+    const price = this.zombies ? itemPrice(item) : null;
+    const ok = price !== null && p.money >= price;
+    if (ok) p.money -= price;
+    this.send(p, 'bought', { item, ok, money: p.money });
+    if (ok) this.broadcast('scores', { players: [...this.players.values()].map((x) => this.playerInfo(x)) });
+  }
+
+  /** Anfitrião: um zumbi acertou um jogador (o servidor aplica o dano). */
+  onZAttack(p: ServerPlayer, d: { target: string; damage: number; from: Vec3Tuple }): void {
+    if (!this.zombies || p.id !== this.hostId) return;
+    const target = this.players.get(d.target);
+    if (!target?.state) return;
+    const dx = target.state.p[0] - d.from[0];
+    const dz = target.state.p[2] - d.from[2];
+    const len = Math.hypot(dx, dz) || 1;
+    this.damage(target, null, Math.min(60, d.damage), 'torso', 'zombie', [d.from[0], 1.2, d.from[2]], [dx / len, 0, dz / len]);
+  }
+
+  /** Tiro de um jogador num zumbi → anfitrião (que aplica o dano). */
+  onZHit(p: ServerPlayer, d: { id: number; mesh: number; damage: number; point: Vec3Tuple; dir: Vec3Tuple }): void {
+    if (!this.zombies || !this.hostId || p.id === this.hostId) return;
+    const host = this.players.get(this.hostId);
+    if (host) this.send(host, 'zhit', { by: p.id, ...d });
+  }
+
   onImpact(p: ServerPlayer, d: { point: Vec3Tuple; dir: Vec3Tuple; damage: number }): void {
     if (!p.alive) return;
     this.broadcast('impact', { by: p.id, point: d.point, dir: d.dir, damage: Math.min(d.damage, 400) }, p.id);
@@ -206,6 +290,8 @@ export class Room {
     const def = findWeapon(d.weapon);
     const ok = def && ((d.kind === 'launch' && def.kind === 'firearm' && def.projectile) || (d.kind === 'throw' && def.kind === 'throwable'));
     if (!p.alive || !ok || p.projectiles.size > 24) return;
+    // PvP: sem lança-foguetes nem granadas
+    if (!this.zombies && !pvpAllowed(def)) return;
     const t = now();
     p.projectiles.set(d.id, { weapon: def.id, t, origin: d.origin, done: false });
     for (const [k, x] of p.projectiles) if (t - x.t > 20) p.projectiles.delete(k);
@@ -242,7 +328,8 @@ export class Room {
     this.updateMatch(t);
     // renascimento
     for (const p of this.players.values()) {
-      if (!p.alive && t >= p.respawnAt) this.respawn(p);
+      // zumbis: quem morreu só volta no começo da próxima onda
+      if (!p.alive && t >= p.respawnAt && !this.zombies) this.respawn(p);
     }
     this.updateFires(t);
     const players = [...this.players.values()].filter((p) => p.alive && p.state).map((p) => ({ id: p.id, s: p.state! }));
@@ -275,6 +362,7 @@ export class Room {
   private damage(target: ServerPlayer, by: ServerPlayer | null, amount: number, zone: PlayerZone, weapon: string, point: Vec3Tuple | null, dir: Vec3Tuple): void {
     if (!target.alive || now() < target.protectedUntil || this.phase === 'ended' || this.phase === 'countdown') return;
     if (this.teams && by && by !== target && by.team === target.team) return; // sem fogo amigo nos modos por times
+    if (this.zombies && by && by !== target) return; // cooperativo: explosão de aliado não fere
     if (by === target) amount *= SELF_DAMAGE;
     amount = Math.round(amount);
     if (amount <= 0) return;
@@ -296,6 +384,7 @@ export class Room {
     }
     this.broadcast('kill', { killer: killer?.id ?? victim.id, victim: victim.id, weapon, zone, dir });
     this.broadcast('scores', { players: [...this.players.values()].map((p) => this.playerInfo(p)) });
+    if (this.zombies) return this.checkWipe();
     if (this.phase !== 'playing' || !killer) return this.broadcastMatch();
     if (this.teams && this.score[killer.team] >= MODES[this.mode].scoreLimit) this.endMatch(killer.team);
     else if (this.mode === 'ffa' && killer.kills >= MODES.ffa.scoreLimit) this.endMatch('draw', killer);
@@ -342,15 +431,16 @@ export class Room {
    * evitando os ocupados e os que estão perto de inimigos vivos.
    */
   private pickSpawn(p: ServerPlayer): { p: Vec3Tuple; yaw: number } {
-    const ffa = !this.teams;
-    const points = ffa ? [...TEAM_SPAWNS.green.points, ...TEAM_SPAWNS.blue.points] : TEAM_SPAWNS[p.team].points;
+    const ffa = !this.teams && !this.zombies;
+    // zumbis: todos juntos na base azul
+    const points = this.zombies ? TEAM_SPAWNS.blue.points : ffa ? [...TEAM_SPAWNS.green.points, ...TEAM_SPAWNS.blue.points] : TEAM_SPAWNS[p.team].points;
     const others = [...this.players.values()].filter((o) => o !== p && o.alive && o.state);
     const free = points.filter((s) => others.every((o) => dist(s, o.state!.p) > 1.2));
     const safe = free.filter((s) => others.every((o) => (!ffa && o.team === p.team) || dist(s, o.state!.p) > SPAWN_SAFE_RADIUS));
     const pool = safe.length ? safe : free.length ? free : points;
     const best = pool[Math.floor(Math.random() * pool.length)];
     // cada um por si: olha para o centro do mapa
-    const yaw = ffa ? (best[2] > 0 ? 0 : Math.PI) : TEAM_SPAWNS[p.team].yaw;
+    const yaw = ffa ? (best[2] > 0 ? 0 : Math.PI) : this.zombies ? TEAM_SPAWNS.blue.yaw : TEAM_SPAWNS[p.team].yaw;
     return { p: [...best] as Vec3Tuple, yaw };
   }
 
@@ -360,7 +450,7 @@ export class Room {
     // por times: alguém em cada time; cada um por si: pelo menos 2 jogadores
     const both = this.teams
       ? (['green', 'blue'] as TeamId[]).every((t) => [...this.players.values()].some((p) => p.team === t))
-      : this.players.size >= 2;
+      : this.players.size >= (this.zombies ? 1 : 2);
     if (this.phase === 'warmup' && both) this.startMatch();
     else if ((this.phase === 'playing' || this.phase === 'countdown') && !both) this.setPhase('warmup', 0);
     else this.broadcastMatch();
@@ -374,6 +464,7 @@ export class Room {
       p.kills = 0;
       p.deaths = 0;
       p.level = 0;
+      p.money = START_MONEY;
       this.sendLevel(p);
       this.respawn(p);
     }
@@ -392,6 +483,11 @@ export class Room {
   }
 
   private updateMatch(t: number): void {
+    // zumbis: ondas sem fim (a partida não acaba pelo tempo)
+    if (this.zombies && this.phase === 'playing') {
+      if (t - this.lastMatchBroadcast > 5) this.broadcastMatch();
+      return;
+    }
     if (this.phase === 'playing' && t >= this.phaseEnds) {
       if (!this.teams) {
         // fim do tempo: vence quem lidera
@@ -451,7 +547,7 @@ export class Room {
   // ───────────── utilitários ─────────────
 
   playerInfo(p: ServerPlayer): PlayerInfo {
-    return { id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths, alive: p.alive, hp: p.hp, ...(this.gungame ? { level: p.level } : {}) };
+    return { id: p.id, name: p.name, team: p.team, kills: p.kills, deaths: p.deaths, alive: p.alive, hp: p.hp, ...(this.gungame ? { level: p.level } : {}), ...(this.zombies ? { money: p.money } : {}) };
   }
 
   private dirBetween(a: ServerPlayer, b: ServerPlayer): Vec3Tuple {

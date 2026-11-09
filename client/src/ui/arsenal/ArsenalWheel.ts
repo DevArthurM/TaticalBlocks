@@ -200,6 +200,11 @@ export class ArsenalWheel {
   private renderThrowables(animate = true): void {
     const { throwY, circle } = this.px;
     const host = this.stage.querySelector('.aw-throw')!;
+    // PvP: sem granadas (a fileira de arremessáveis some)
+    if (!this.catalog.some((w) => w.kind === 'throwable')) {
+      host.innerHTML = '';
+      return;
+    }
     host.classList.toggle('static', !animate);
     const g = this.loadout.grenade;
     const def = this.find(g.type);

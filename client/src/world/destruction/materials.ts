@@ -48,19 +48,21 @@ const shade = (base: THREE.Color, k: number) => base.clone().multiplyScalar(k);
 export const VOXEL_MATERIALS: Record<DestructibleMaterial, VoxelMaterial> = {
   concrete: {
     id: 'concrete',
-    label: 'Concreto',
+    label: 'Alvenaria',
     hp: 4,
     spread: 1,
     maxSpan: 5,
     density: 2200,
     roughness: 0.92,
     metalness: 0,
-    baseColor: 0xecece8,
+    // muro de tijolos: cada voxel com uma cor de tijolo (sem textura); o miolo exposto é cinza (cimento)
+    baseColor: 0xb0553a,
     sound: 'hitConcrete',
-    impact: { sparks: 2, chips: 3, dust: 8, dustColor: 0xdadcdf },
+    impact: { sparks: 2, chips: 3, dust: 8, dustColor: 0xb58a76 },
     color: (base, c) => {
-      const depth = c.depth === 0 ? 1 : c.depth === 1 ? 0.88 : 0.78;
-      return shade(base, depth * (1 - c.rnd() * 0.04));
+      if (c.depth > 0) return new THREE.Color(0x8d8a84).multiplyScalar(0.9 + c.rnd() * 0.1);
+      const v = 0.82 + c.rnd() * 0.22;
+      return shade(base, v).lerp(new THREE.Color(0x6e2e1e), c.rnd() * 0.18);
     },
   },
   wood: {

@@ -43,6 +43,10 @@ export class AttachmentEditor {
   /** Pré-visualização (mouse sobre uma opção); `null` volta ao escolhido. */
   onPreview: (att: WeaponAttachments | null) => void = () => {};
   onClose: () => void = () => {};
+  /** Modo zumbis: preço do acessório ainda não comprado (null = já é do jogador). */
+  priceOf: ((weapon: string, att: AttachmentId) => number | null) | null = null;
+  /** Modo zumbis: compra o acessório (true se deu certo). */
+  onBuy: (weapon: string, att: AttachmentId) => Promise<boolean> = async () => false;
 
   private readonly root: HTMLDivElement;
   private readonly svg: SVGSVGElement;
@@ -168,6 +172,7 @@ export class AttachmentEditor {
             return `<button type="button" class="att-opt${sel ? ' selected' : ''}" data-opt="${o ?? ''}" style="--i:${i}">
               ${o ? `<img src="${gif(o)}" alt="" draggable="false" />` : '<span class="att-none"></span>'}
               <span class="att-opt-name">${esc(o ? ATTACHMENTS[o].name : slot === 'magazine' ? 'Padrão' : 'Nenhum')}</span>
+              ${this.priceTag(o)}
             </button>`;
           })
           .join('')}</div>`
@@ -207,7 +212,7 @@ export class AttachmentEditor {
     const opt = t.closest<HTMLElement>('[data-opt]');
     if (opt) {
       const slot = opt.closest<HTMLElement>('.att-box')!.dataset.slot as AttachmentSlot;
-      return this.choose(slot, (opt.dataset.opt || null) as AttachmentId | null);
+      return void this.choose(slot, (opt.dataset.opt || null) as AttachmentId | null);
     }
     if (square) {
       const slot = square.dataset.square as AttachmentSlot;
@@ -225,9 +230,20 @@ export class AttachmentEditor {
     }
   };
 
+  private priceTag(id: AttachmentId | null): string {
+    const p = id && this.def && this.priceOf ? this.priceOf(this.def.id, id) : null;
+    return p === null ? '' : `<i class="att-price">$${p.toLocaleString('pt-BR')}</i>`;
+  }
+
   /** Escolhe (salva) a opção: o quadrado e o destaque mudam; a fileira continua aberta. */
-  private choose(slot: AttachmentSlot, id: AttachmentId | null): void {
+  private async choose(slot: AttachmentSlot, id: AttachmentId | null): Promise<void> {
     if (!this.def) return;
+    // modo zumbis: acessório ainda não comprado → compra primeiro
+    if (id && this.priceOf?.(this.def.id, id) != null && !(await this.onBuy(this.def.id, id))) {
+      this.hoverDesc = 'Dinheiro insuficiente';
+      this.renderInfo();
+      return;
+    }
     const next: WeaponAttachments = { ...this.att };
     if (id) next[slot] = id;
     else delete next[slot];

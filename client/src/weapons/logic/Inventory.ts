@@ -15,6 +15,28 @@ export type HeldItem =
 export class Inventory {
   private items = new Map<EquipSlot, HeldItem>();
   grenades = 0;
+  /**
+   * Modo zumbis: munição limitada (reserva inicial por arma). Cada arma comprada
+   * guarda o próprio estado — trocar e voltar não enche a munição de graça.
+   */
+  limitedAmmo: ((def: FirearmDef) => number) | null = null;
+  private readonly guns = new Map<string, Firearm>();
+
+  /** Estado (munição) da arma, criado na primeira vez. */
+  firearm(def: FirearmDef): Firearm {
+    let g = this.guns.get(def.id);
+    if (!g) {
+      g = new Firearm(def);
+      if (this.limitedAmmo) g.reserve = this.limitedAmmo(def);
+      this.guns.set(def.id, g);
+    }
+    return g;
+  }
+
+  /** Esquece o estado de todas as armas (nova partida). */
+  resetGuns(): void {
+    this.guns.clear();
+  }
 
   constructor(
     public loadout: Loadout,
@@ -42,7 +64,7 @@ export class Inventory {
         this.items.set(slot, old);
         continue;
       }
-      if (def.kind === 'firearm') this.items.set(slot, { slot, kind: 'firearm', def, gun: new Firearm(def) });
+      if (def.kind === 'firearm') this.items.set(slot, { slot, kind: 'firearm', def, gun: this.firearm(def) });
       else if (def.kind === 'melee') this.items.set(slot, { slot, kind: 'melee', def });
       else this.items.set(slot, { slot, kind: 'throwable', def });
     }

@@ -29,6 +29,8 @@ export class World {
     this.sun = this.env.sun;
 
     const ground = createGround(map.size, anisotropy);
+    // chão escuro: aparece nas frestas entre os quadradinhos do piso (FloorTiles)
+    (ground.material as THREE.MeshStandardMaterial).color.set(0x2a2c30);
     this.root.add(ground);
     this.hitTargets.push(ground);
 

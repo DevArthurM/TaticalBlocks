@@ -78,6 +78,37 @@ export class HUD {
   private readonly scope: HTMLDivElement;
   private readonly flash: HTMLDivElement;
   private readonly prompt: HTMLDivElement;
+  private readonly hitmarker: HTMLDivElement;
+  private hitTimer = 0;
+  private readonly purse: HTMLDivElement;
+  private readonly moneyEl: HTMLElement;
+  private readonly ammoEl: HTMLElement;
+  private moneyText = '';
+  private ammoText = '';
+
+  /** Modo zumbis: dinheiro no canto (null esconde). */
+  setMoney(text: string | null): void {
+    this.purse.classList.toggle('hidden', text === null);
+    if (text !== null && text !== this.moneyText) this.moneyEl.textContent = this.moneyText = text;
+  }
+
+  /** Modo zumbis: munição da arma na mão (pente / reserva). */
+  setAmmo(text: string): void {
+    if (text !== this.ammoText) this.ammoEl.textContent = this.ammoText = text;
+  }
+
+  /** Ganhou dinheiro: "+$60" sobe e some. */
+  earn(text: string): void {
+    const pop = el('span', 'purse-pop', this.purse);
+    pop.textContent = text;
+    setTimeout(() => pop.remove(), 1200);
+  }
+
+  /** Marcador de acerto no centro (amarelo na cabeça, vermelho e maior no abate). */
+  hitMark(head: boolean, kill: boolean): void {
+    this.hitTimer = kill ? 0.45 : 0.22;
+    this.hitmarker.className = `hitmark${head ? ' head' : ''}${kill ? ' kill' : ''}`;
+  }
   private readonly tunnel: HTMLDivElement;
   private readonly hurtEl: HTMLDivElement;
   private readonly banner: HTMLDivElement;
@@ -113,6 +144,11 @@ export class HUD {
       this.damageMarks.push({ el: mark, x: 0, z: 0, life: 0 });
     }
     this.prompt = el('div', 'prompt', this.root);
+    this.hitmarker = el('div', 'hitmark', this.root);
+    for (let i = 0; i < 4; i++) el('i', '', this.hitmarker);
+    this.purse = el('div', 'purse hidden', this.root);
+    this.ammoEl = el('span', 'purse-ammo', this.purse);
+    this.moneyEl = el('b', 'purse-money', this.purse);
 
     this.inspect = el('div', 'inspect', this.root);
     const bob = el('div', 'inspect-bob', this.inspect);
@@ -238,10 +274,14 @@ export class HUD {
     this.crosshair.style.setProperty('--gap', `${Math.round(s.crosshairGap)}px`);
     // a mira segue o desvio do braço (recuo + mola de tensão)
     this.crosshair.style.transform = `translate(${s.aimOffset[0].toFixed(1)}px, ${s.aimOffset[1].toFixed(1)}px)`;
+    // o marcador de acerto acompanha a mira (recuo/desvio do braço)
+    this.hitmarker.style.transform = this.crosshair.style.transform;
     this.crosshair.classList.toggle('hidden', s.aiming || s.sprinting || s.scoped);
     this.crosshair.classList.toggle('round', s.round);
     this.tunnel.style.setProperty('--f', s.tunnel.toFixed(3));
     this.hurtEl.style.opacity = s.hurt.toFixed(3);
+    this.hitTimer = Math.max(0, this.hitTimer - dt);
+    this.hitmarker.style.opacity = String(Math.min(1, this.hitTimer / 0.12));
     this.bannerTimer -= dt;
     this.banner.classList.toggle('on', this.bannerTimer > 0);
 

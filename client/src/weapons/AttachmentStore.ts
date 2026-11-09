@@ -7,7 +7,9 @@ const KEY = 'fps.attachments';
 export class AttachmentStore {
   private data: Record<string, WeaponAttachments> = {};
 
-  constructor() {
+  /** `persist` false: só na memória (modo zumbis: acessórios comprados não vão para o navegador). */
+  constructor(private readonly persist = true) {
+    if (!persist) return;
     try {
       const raw = localStorage.getItem(KEY);
       if (raw) this.data = JSON.parse(raw) as Record<string, WeaponAttachments>;
@@ -23,6 +25,7 @@ export class AttachmentStore {
   set(id: string, att: WeaponAttachments): WeaponAttachments {
     const clean = sanitizeAttachments(findWeapon(id), att);
     this.data[id] = clean;
+    if (!this.persist) return clean;
     try {
       localStorage.setItem(KEY, JSON.stringify(this.data));
     } catch {

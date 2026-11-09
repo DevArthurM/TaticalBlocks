@@ -166,6 +166,24 @@ kbd {
   background: radial-gradient(ellipse 70% 70% at 50% 50%, transparent 45%, rgba(140, 0, 0, 0.35) 75%, rgba(120, 0, 0, 0.75) 100%);
 }
 
+/* Modo zumbis: dinheiro e munição no canto inferior direito */
+.purse { position: absolute; right: 28px; bottom: 24px; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; color: var(--hud-fg); text-shadow: var(--hud-shadow); }
+.purse.hidden { display: none; }
+.purse-ammo { font-size: 26px; font-weight: 700; letter-spacing: 0.04em; }
+.purse-money { font-size: 22px; font-weight: 700; color: var(--hud-accent); }
+.purse-pop { position: absolute; right: 0; bottom: 30px; font-size: 20px; font-weight: 700; color: var(--hud-accent); animation: purse-pop 1.2s ease-out forwards; }
+@keyframes purse-pop { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-46px); } }
+
+/* Marcador de acerto (segue a mira; usado no solo e no online) */
+.hitmark { position: absolute; left: 50%; top: 50%; width: 0; height: 0; opacity: 0; pointer-events: none; }
+.hitmark i { position: absolute; width: 9px; height: 2px; background: #fff; box-shadow: 0 0 2px rgba(0, 0, 0, 0.8); }
+.hitmark i:nth-child(1) { transform: translate(-14px, -12px) rotate(45deg); }
+.hitmark i:nth-child(2) { transform: translate(5px, -12px) rotate(-45deg); }
+.hitmark i:nth-child(3) { transform: translate(-14px, 10px) rotate(-45deg); }
+.hitmark i:nth-child(4) { transform: translate(5px, 10px) rotate(45deg); }
+.hitmark.head i { background: #ffd23f; width: 11px; }
+.hitmark.kill i { background: var(--hud-danger); width: 12px; height: 3px; }
+
 /* Direção do dano: meia-lua vermelha em volta da mira apontando para quem atirou */
 .dmg-dir {
   position: absolute; left: 50%; top: 50%; width: 220px; height: 220px; margin: -110px 0 0 -110px;

@@ -13,6 +13,8 @@ const MAX_PHYSICS_PER_SHOT = 10;
 const MAX_PHYSICS_PER_COLLAPSE = 70;
 /** Dano que um tiro causa por ponto de dano da arma. */
 const SHOT_POWER = 0.1;
+/** Cor do sangue seco para onde as manchas nos voxels puxam. */
+const BLOOD = new THREE.Color(0x7a0606);
 /** Dano no centro de uma explosão. */
 const BLAST_POWER = 40;
 
@@ -41,7 +43,11 @@ export class DestructionSystem {
     private readonly extraColliders: THREE.Box3[] = [],
   ) {
     const mk = (id: DestructibleMaterial) =>
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: VOXEL_MATERIALS[id].roughness, metalness: VOXEL_MATERIALS[id].metalness });
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: VOXEL_MATERIALS[id].roughness,
+        metalness: VOXEL_MATERIALS[id].metalness,
+      });
     this.materials = { concrete: mk('concrete'), wood: mk('wood'), metal: mk('metal'), plastic: mk('plastic') };
 
     for (const b of world.blocks) {
@@ -92,6 +98,21 @@ export class DestructionSystem {
     }
   }
 
+  /**
+   * Gota de sangue em `p`: se estiver dentro de um voxel sólido, mancha esse voxel
+   * (fica mais vermelho) e devolve true.
+   */
+  stainAt(p: THREE.Vector3, amount: number): boolean {
+    for (const block of this.blocks) {
+      if (!block.bounds.containsPoint(p)) continue;
+      const i = block.cellAt(p);
+      if (i === null || !block.solid[i]) continue;
+      block.stain(i, amount, BLOOD);
+      return true;
+    }
+    return false;
+  }
+
   /** Restaura o mapa inteiro (nova partida online): todos os voxels de volta, sem marcas. */
   reset(): void {
     for (const block of this.blocks) {
@@ -105,6 +126,7 @@ export class DestructionSystem {
 
   /** Aplica as mudanças pendentes uma vez por quadro (em cascata: tetos, pilhas). */
   update(): void {
+    for (const b of this.blocks) b.flushColors();
     let changed = false;
     for (let pass = 0; pass < 8; pass++) {
       const pending = this.blocks.filter((b) => b.dirty || b.recheck);

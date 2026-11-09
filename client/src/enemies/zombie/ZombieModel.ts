@@ -90,6 +90,9 @@ interface Mats {
   fabric: Record<Fabric, THREE.Material>;
   hair: THREE.Material;
   wound: THREE.Material;
+  /** Carne aberta (ferida funda) e osso aparecendo. */
+  flesh: THREE.Material;
+  bone: THREE.Material;
 }
 let mats: Mats | null = null;
 const skinMats = new Map<string, SkinMats>();
@@ -107,6 +110,8 @@ function materials(): Mats {
     },
     hair: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 }),
     wound: new THREE.MeshStandardMaterial({ color: 0x6e1210, roughness: 0.6 }),
+    flesh: new THREE.MeshStandardMaterial({ color: 0x9c2a22, roughness: 0.45 }),
+    bone: new THREE.MeshStandardMaterial({ color: 0xe8dcc0, roughness: 0.7 }),
   };
   return mats;
 }
@@ -127,7 +132,7 @@ function skinMaterials(skin: SkinDef): SkinMats {
 /** Todos os materiais do zumbi (para criar os lotes instanciados de antemão). */
 export function zombieMaterials(): Mat[] {
   const m = materials();
-  const out: Mat[] = [...Object.values(m.fabric), m.hair, m.wound];
+  const out: Mat[] = [...Object.values(m.fabric), m.hair, m.wound, m.flesh, m.bone];
   for (const skin of SKINS) {
     const s = skinMaterials(skin);
     out.push(s.skin, s.head);
@@ -138,6 +143,12 @@ export function zombieMaterials(): Mat[] {
 /** Material de "ferida" para cobrir os tocos de membros arrancados. */
 export function woundMaterial(): THREE.Material {
   return materials().wound;
+}
+
+/** Materiais das feridas: sangue escuro, carne aberta e osso. */
+export function goreMaterials(): { wound: THREE.Material; flesh: THREE.Material; bone: THREE.Material } {
+  const m = materials();
+  return { wound: m.wound, flesh: m.flesh, bone: m.bone };
 }
 
 /** Monta um zumbi voxel na variação pedida. Todas as malhas recebem `userData` com zona e lado. */

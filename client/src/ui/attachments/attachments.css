@@ -63,3 +63,6 @@
 .att-info em { font-style: normal; font-size: 12px; font-weight: 700; letter-spacing: 0.12em; color: var(--hud-accent); }
 .att-stats { display: inline-flex; gap: 6px; }
 .att-stats i { font-style: normal; font-size: 12px; font-weight: 700; color: var(--hud-fg); padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.1); }
+
+/* Modo zumbis: preço do acessório ainda não comprado */
+.att-price { position: absolute; top: 3px; right: 4px; font-style: normal; font-size: 11px; font-weight: 700; color: #10140a; background: var(--hud-accent); padding: 0 4px; }

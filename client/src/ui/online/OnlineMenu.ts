@@ -8,6 +8,7 @@ const MODE_DESC: Record<GameMode, string> = {
   '10v10': 'Times de 10: primeiro time a 75 abates.',
   ffa: 'Cada um por si (até 12): primeiro a 20 abates vence.',
   gungame: 'Cada abate troca sua arma pela próxima da escada; termine com a faca. Faca rebaixa a vítima.',
+  zombies: 'Cooperativo (até 5): sobreviva juntos às ondas de zumbis, até 64 ao mesmo tempo.',
 };
 const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 

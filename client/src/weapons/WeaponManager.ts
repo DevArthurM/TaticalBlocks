@@ -1,4 +1,4 @@
-import { applyAttachmentStats, ATTACHMENTS, sanitizeAttachments, type AttachmentId, SLOT_ORDER as ATTACHMENT_SLOTS, type WeaponAttachments } from '@shared/weapons/attachments';
+import { applyAttachmentStats, ATTACHMENTS, attachmentOptions, sanitizeAttachments, type AttachmentId, SLOT_ORDER as ATTACHMENT_SLOTS, type WeaponAttachments } from '@shared/weapons/attachments';
 import { findWeapon } from '@shared/weapons/catalog';
 import type { Loadout } from '@shared/weapons/loadout';
 import type { FirearmDef, MeleeDef, ThrowableDef, WeaponCategory } from '@shared/weapons/types';
@@ -20,6 +20,7 @@ import { ArmRecoil } from './logic/ArmRecoil';
 import type { Firearm } from './logic/Firearm';
 import { type EquipSlot, type HeldItem, Inventory, SLOT_ORDER } from './logic/Inventory';
 import { Viewmodel } from './view/Viewmodel';
+import { maxReserve, startReserve } from '@shared/weapons/economy';
 import { AttachmentStore } from './AttachmentStore';
 
 export interface WeaponManagerDeps {
@@ -101,6 +102,8 @@ export class WeaponManager {
   baseFov: number = CAMERA.fov;
   /** Tempo restante da inspeção (V). */
   inspectTime = 0;
+  /** T numa arma sem acessórios: inspeciona como o V. */
+  private inspectRequested = false;
   /** Inspeção atual tira o pente? (e para que lado) */
   private inspectMag: 'down' | 'up' | null = null;
   /** Mirar segurando o botão direito ou alternando com um clique. */
@@ -138,7 +141,23 @@ export class WeaponManager {
 
   // ─────────────────────────── acessórios ───────────────────────────
 
-  readonly attachmentStore = new AttachmentStore();
+  attachmentStore = new AttachmentStore();
+
+  /**
+   * Modo zumbis: munição limitada por arma e acessórios só na memória (comprados
+   * na loja; não mexe nos salvos no navegador).
+   */
+  enableZombieMode(): void {
+    this.attachmentStore = new AttachmentStore(false);
+    this.inventory.limitedAmmo = startReserve;
+    this.inventory.resetGuns();
+  }
+
+  /** Pacote de munição: +`mags` pentes na reserva (até o máximo). */
+  addAmmo(def: FirearmDef, mags: number): void {
+    const gun = this.inventory.firearm(def);
+    gun.reserve = Math.min(maxReserve(def), gun.reserve + def.magazineSize * mags);
+  }
   /** Modo de personalização (T): arma na frente da câmera, sem atirar/mirar. */
   customizing = false;
   /** 0..1 suavizado (pose e desfoque do fundo). */
@@ -297,7 +316,12 @@ export class WeaponManager {
 
   update(dt: number, time: number, input: Input): void {
     this.customizeT = approach(this.customizeT, this.customizing ? 1 : 0, dt / 0.35);
-    if (input.wasPressed(KEYS.customize) && !this.customizing) this.onCustomizeRequest();
+    if (input.wasPressed(KEYS.customize) && !this.customizing) {
+      // arma sem acessórios (revólver, minigun, lança-foguetes, branca, granada): T = inspecionar (V)
+      const def = this.held?.def;
+      if (def && Object.keys(attachmentOptions(findWeapon(def.id))).length === 0) this.inspectRequested = true;
+      else this.onCustomizeRequest();
+    }
     this.updateDevices();
     if (this.customizing || this.customizeT > 0.02) {
       // personalizando: sem troca de arma, tiro ou mira
@@ -404,7 +428,9 @@ export class WeaponManager {
   private updateInspect(dt: number, input: Input, item: HeldItem | undefined): void {
     const gun = this.gun;
     const blocked = !item || this.drawLock > 0 || this.busyLock > 0 || gun?.reloading || this.d.player.ledgePhase !== null;
-    if (input.wasPressed(KEYS.inspect) && !blocked) {
+    const wants = input.wasPressed(KEYS.inspect) || this.inspectRequested;
+    this.inspectRequested = false;
+    if (wants && !blocked) {
       if (this.inspectTime > 0) this.cancelInspect();
       else {
         this.inspectTime = INSPECT_TIME;

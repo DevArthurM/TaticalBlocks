@@ -62,6 +62,8 @@ animação de recarga personalizada. Loadout: 1 principal, 1 secundária, 1 arma
 
 Mapa padrão (`shared/map/voxelYard.ts`, usado pelo servidor e pelo modo offline), todo em voxel e destrutível, com borda indestrutível. Arena **PvP 1v1** com simetria de ponto (girada 180° em torno do centro: as duas bases têm exatamente as mesmas rotas e coberturas):
 
+- **Piso de rua**: o chão é uma grade de quadrados de 0,5 m em tons de asfalto (não são voxels, não quebram), cada um com cor própria (`client/src/world/FloorTiles.ts`, uma única malha instanciada).
+- **Sangue que mancha**: ao morrer, o zumbi esguicha sangue do ponto exato do tiro (ou do toco, se a parte foi arrancada) e continua sangrando dali enquanto o corpo cai; corpos no chão também levam tiro — são empurrados (o ragdoll acorda se já estava parado), ganham ferida e soltam sangue do ponto atingido; as gotas têm gravidade e, ao encostar num quadrado do piso ou num voxel, deixam a cor dele mais vermelha — cada gota satura mais (`client/src/effects/BloodSystem.ts`). No online, o mapa restaurado limpa as manchas.
 - **Borda invisível**: paredes de colisão altas na borda; não dá para sair do mapa escalando.
 - **Bases** azul (sul, spawn) e verde (norte): sala em U com saída central e portas laterais, faixa e pilares na cor do time, muretas logo na saída.
 - **Meio**: bunker de concreto com teto, janelas alinhadas à rota central e portas laterais; muretas, caixotes e pilares de aproximação.
@@ -74,7 +76,7 @@ Mapa padrão (`shared/map/voxelYard.ts`, usado pelo servidor e pelo modo offline
 |---|---|---|
 | Plástico | 1 | estilhaça fácil, pedaços coloridos e leves; vão máx. 1,5 m |
 | Madeira | 2 | tábuas visíveis, lascas; vão máx. 3,5 m |
-| Concreto | 4 | resistente, poeira; vão máx. 5 m |
+| Alvenaria (tijolos) | 4 | resistente, poeira; vão máx. 5 m — muros de tijolo com miolo de cimento |
 | Metal | 10 | amassa/escurece antes de furar, faíscas, chapa ondulada; vão máx. 6 m |
 
 Dano do tiro ≈ dano da arma ÷ 10 por voxel, caindo com a distância ao ponto de impacto. Blocos se apoiam no chão ou em voxels de outros blocos (embaixo ou ao lado); o que perde apoio ou passa do vão máximo do material desaba em cascata. Ajustes em `client/src/world/destruction/materials.ts`.
@@ -94,7 +96,7 @@ Durante o jogo só a mira aparece. A munição é vista inspecionando a arma (**
 
 ## Acessórios (T)
 
-Aperte **T**: o personagem segura a arma perto da câmera (de lado, cano para a esquerda, balançando de leve; pistolas só na mão direita), o fundo desfoca e de cada encaixe da arma sai uma linha até um quadrado com o acessório atual (GIF girando). Clicar no quadrado abre a fileira de opções (como os arremessáveis do arsenal): passar o mouse troca na hora no modelo, só clicar escolhe — a opção escolhida fica destacada e o quadrado muda. Embaixo aparecem o nome da arma, os atributos e a descrição da opção sob o mouse. Os GIFs dos acessórios (`att_*.gif`) são gerados em `/tools/gifs.html` → *Renderizar acessórios* (`client/src/weapons/models/attachmentPreview.ts`). **T** ou **Esc** volta. Toda arma começa sem nada; a escolha fica salva por arma no navegador.
+Aperte **T**: o personagem segura a arma perto da câmera (de lado, cano para a esquerda, balançando de leve; pistolas só na mão direita), o fundo desfoca e de cada encaixe da arma sai uma linha até um quadrado com o acessório atual (GIF girando). Clicar no quadrado abre a fileira de opções (como os arremessáveis do arsenal): passar o mouse troca na hora no modelo, só clicar escolhe — a opção escolhida fica destacada e o quadrado muda. Embaixo aparecem o nome da arma, os atributos e a descrição da opção sob o mouse. Os GIFs dos acessórios (`att_*.gif`) são gerados em `/tools/gifs.html` → *Renderizar acessórios* (`client/src/weapons/models/attachmentPreview.ts`). **T** ou **Esc** volta. Em armas que não aceitam acessórios (revólver, minigun, lança-foguetes, faca, granadas) o **T** faz o mesmo que o **V** (inspecionar). Toda arma começa sem nada; a escolha fica salva por arma no navegador.
 
 | Encaixe | Opções | Efeito |
 |---|---|---|
@@ -132,7 +134,10 @@ Pelo menu principal (**Jogar Online**) — tudo na mesma rota `/`, sem parâmetr
 |---|---|---|
 | 1v1 / 5v5 / 10v10 | times Verde × Azul | primeiro time a 10 / 40 / 75 abates (ou mais abates em 10 min) |
 | **1 contra todos** | até 12, cada um por si | primeiro a 20 abates (ou o líder em 10 min) |
+| **Zumbis** | até 5, cooperativo | todos juntos contra ondas de zumbis (até 64 ao mesmo tempo); sem fogo amigo e sem fim de partida; o placar mostra a onda e os zumbis restantes, e a tabela os abates de cada um |
 | **Gun Game** | até 12, cada um por si | cada abate troca sua arma pela próxima da escada (M4 → AK → HK416 → MP7 → P90 → 870 → AA-12 → SR-25 → AWM → M249 → revólver → G17 → faca); vence quem matar com a faca. Abate de faca rebaixa a vítima um nível |
+
+**Modo zumbis online:** um dos jogadores (o *anfitrião*, o primeiro da sala) simula os zumbis com a mesma IA do solo — cada zumbi persegue o jogador vivo mais perto pelo menor caminho — e envia 10×/s o estado compacto deles (posição, direção, tipo, roupa, pele e partes arrancadas). Os outros só espelham. Acertos de quem não é o anfitrião vão pelo servidor até ele, que aplica o dano e avisa todos das mortes, membros arrancados (inclusive pendurados) e ondas; os golpes dos zumbis passam pelo servidor, que tira a vida do jogador. Se o anfitrião sair, outro jogador assume na hora. Mensagens: `zsync`, `zev`, `zatk`, `zhit` (`shared/net/protocol.ts`).
 
 No Gun Game o servidor impõe a arma (só ela e a faca causam dano) e o menu de loadout (B) fica bloqueado; o nível aparece embaixo da tela. Nos modos sem times não há aliados: todos são alvo, os uniformes alternam verde/azul só no visual e o renascimento sorteia entre todos os pontos do mapa.
 
@@ -149,14 +154,24 @@ No Gun Game o servidor impõe a arma (só ela e a faca causam dano) e o menu de 
 
 ## Desempenho
 
-- **Zumbis instanciados** (`client/src/enemies/zombie/ZombieInstancer.ts`): as malhas de cada zumbi continuam existindo (ossos, raycast dos tiros, desmembramento, ragdoll), mas ficam invisíveis; um `InstancedMesh` por material desenha todos de uma vez. Com 32 zumbis: ~727 → ~272 draw calls.
+- **Zumbis instanciados** (`client/src/enemies/zombie/ZombieInstancer.ts`): as malhas de cada zumbi continuam existindo (ossos, raycast dos tiros, desmembramento, ragdoll), mas ficam invisíveis; um `InstancedMesh` por material desenha todos de uma vez. Com 32 zumbis: ~727 → ~272 draw calls (até 64 vivos ao mesmo tempo).
 - **Resolução dinâmica** (Configurações → Gráficos): abaixo de ~50 FPS reduz a resolução em passos de 10% (até 60% da escolhida) e volta a subir aos poucos quando sobra folga. Se subir logo causar nova queda, aquele nível vira teto por 30 s.
 - **Matrizes estáticas**: cenário, voxels, marcas de tiro e tábuas usam `matrixAutoUpdate = false`; as matrizes do mundo são atualizadas uma vez por quadro em `RendererSystem.render`.
 - **Shaders pré-compilados** (`compileAsync`) na abertura ("Preparando gráficos…", até 6 s), para o primeiro tiro/zumbi/explosão não travar. A luz do clarão do tiro fica sempre na cena (intensidade 0), porque mudar o número de luzes troca os shaders.
 
 ## Zumbis
 
-Ondas de **1, 2, 4, 8, 16 e 32** zumbis (depois sempre 32), surgindo pelas bordas.
+Ondas de **1, 2, 4, 8, 16, 32 e 64** zumbis (depois sempre 64, o máximo vivo ao mesmo tempo), surgindo pelas bordas. Acertar um zumbi mostra o **marcador de acerto** na mira (amarelo na cabeça, vermelho e maior no abate).
+
+**Tipos de zumbi** (`ZOMBIE_KINDS` em `client/src/enemies/zombie/Zombie.ts`): **comum**; **corredor** (a partir da onda 2) — 2,4× mais rápido, corre inclinado com passada longa, 70% da vida; **forte** (a partir da onda 3) — 12% maior, tronco e braços bem mais largos, 3,2× de vida, partes 2,2× mais resistentes, golpe 2,2× mais forte e alcance maior, porém mais lento.
+
+**IA de caminho** (`client/src/enemies/NavGrid.ts`): grade de 0,5 m do mapa marcando o que bloqueia a passagem e um campo de fluxo (Dijkstra a partir do jogador) com a menor distância de caminho de cada célula até ele. Cada zumbi segue para onde o caminho encurta, contornando paredes, e vai em linha reta quando ela está livre. O campo é refeito quando o jogador muda de célula (no máximo 4×/s) e a grade quando o mapa é destruído.
+
+**Feridas por parte do corpo**: cada parte acumula o dano que recebe e mostra 3 níveis de ferida no ponto do tiro — 1) arranhão (manchas de sangue), 2) ferida aberta (carne viva), 3) carne exposta com osso saindo (a partir de 20%, 50% e 80% da vida da parte; tronco/cintura/quadril usam 60). As feridas acompanham a parte, inclusive arrancada.
+
+**Ragdoll com ligamentos elásticos** (`client/src/enemies/zombie/Ragdoll.ts`): cada articulação tem um ligamento — frouxo dentro da faixa normal e com tensão que cresce rápido (não linear) ao passar do limite; coluna, pescoço e quadril são mais firmes que os ombros. Joelhos e cotovelos são dobradiças (o joelho só dobra para trás, o cotovelo para a frente, quase sem torcer). Logo após a morte o tônus muscular ainda segura o corpo e some em ~1 s; o atrito das juntas faz o corpo assentar (repousa em ~4 s). A força usa a inércia reduzida do par de segmentos (ação e reação), o que mantém a simulação estável.
+
+**Braço pendurado**: um braço ou antebraço arrancado a tiro tem 50% de chance de não voar — fica pendurado no toco por um ligamento (corda curta com física) e balança enquanto o zumbi anda ou cai.
 
 **Variações procedurais** (`client/src/enemies/zombie/variants.ts`): 5 partes de cima (camiseta, camisa xadrez de manga comprida, regata, jaqueta de couro com gola, avental hospitalar) × 5 de baixo (jeans, cáqui, social preta, bermuda com canela à mostra, moletom) × 5 calçados (sapato, tênis branco, bota com cano, tênis vermelho, descalço) = **125 combinações de roupa**, sobre **5 tons de pele** (cada um com a cor de cabelo própria) — 625 visuais. O diretor sorteia de um "baralho" embaralhado: uma roupa só se repete depois das 125. As roupas são texturas neutras tingidas por instância, então todas as variações usam só 16 materiais (~16 draw calls para todos os zumbis).
 

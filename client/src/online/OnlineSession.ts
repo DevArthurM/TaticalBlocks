@@ -1,4 +1,4 @@
-import { NET, FLAG, MODES, type MatchInfo, type PlayerInfo, type ServerEvents, type TeamId, type Vec3Tuple } from '@shared/net/protocol';
+import { NET, FLAG, MODES, ZOMBIE_FIELDS, type MatchInfo, type PlayerInfo, type ServerEvents, type TeamId, type Vec3Tuple } from '@shared/net/protocol';
 import { decodeAttachments, encodeAttachments } from '@shared/weapons/attachments';
 import { findWeapon } from '@shared/weapons/catalog';
 import * as THREE from 'three';
@@ -14,6 +14,7 @@ import type { DetonationSource } from '../weapons/combat/Explosions';
 import type { LaunchInfo, Projectiles } from '../weapons/combat/Projectiles';
 import type { ShotMeta, WeaponManager } from '../weapons/WeaponManager';
 import type { DestructionSystem } from '../world/destruction/DestructionSystem';
+import type { ZombieDirector } from '../enemies/ZombieDirector';
 import type { NetClient } from './NetClient';
 import { RemotePlayer } from './avatar/RemotePlayer';
 
@@ -68,6 +69,30 @@ export class OnlineSession {
   deathDir: THREE.Vector3 | null = null;
   /** Modo por times (aliados, sem fogo amigo) ou cada um por si. */
   teams = true;
+  /** Modo zumbis (cooperativo): ninguém é inimigo; um jogador simula os zumbis. */
+  zombiesMode = false;
+  /** Modo zumbis: quem simula os zumbis. */
+  hostId = '';
+  /** O anfitrião anterior saiu e este cliente passou a simular os zumbis. */
+  onBecameHost: () => void = () => {};
+  /** Marcador de acerto (o jogo usa o da HUD principal, que segue a mira). */
+  onHitMark: (head: boolean, kill: boolean) => void = (h, k) => this.d.hud.hit(h, k);
+  /** Modo zumbis: saldo vindo do servidor. */
+  onMoney: (money: number) => void = () => {};
+  /** Modo zumbis: todos morreram (fim de jogo). */
+  onGameOver: () => void = () => {};
+  private readonly pendingBuys: { item: string; resolve: (r: { ok: boolean; money: number }) => void }[] = [];
+
+  /** Modo zumbis: compra na loja (o servidor confere e desconta o saldo). */
+  buy(item: string): Promise<{ ok: boolean; money: number }> {
+    return new Promise((resolve) => {
+      this.pendingBuys.push({ item, resolve });
+      this.d.net.send('buy', { item });
+    });
+  }
+  get isHost(): boolean {
+    return this.zombiesMode && this.hostId === this.myId;
+  }
   /** Gun Game: o servidor impõe a arma (o jogo troca o loadout). */
   onForcedWeapon: (weapon: string, level: number, demoted: boolean) => void = () => {};
   private readonly remotes = new Map<string, RemotePlayer>();
@@ -106,6 +131,7 @@ export class OnlineSession {
       players.forEach((p) => this.infos.set(p.id, p));
       const me = players.find((p) => p.id === this.myId);
       if (me && !this.d.hud.gungame) this.d.hud.myValue = me.kills;
+      if (me?.money !== undefined && !this.pendingBuys.length) this.onMoney(me.money);
     });
     on('pong', ({ t }) => (d.hud.ping = Math.round(performance.now() - t)));
     on('gungame', (m) => {
@@ -113,6 +139,50 @@ export class OnlineSession {
       this.onForcedWeapon(m.weapon, m.level, !!m.demoted);
     });
     d.projectiles.onLaunch = (info) => this.onLocalLaunch(info);
+    on('bought', (m) => {
+      const i = this.pendingBuys.findIndex((b) => b.item === m.item);
+      if (i >= 0) this.pendingBuys.splice(i, 1)[0].resolve({ ok: m.ok, money: m.money });
+    });
+    on('host', ({ id }) => {
+      const was = this.isHost;
+      this.hostId = id;
+      if (this.isHost && !was) this.onBecameHost();
+    });
+  }
+
+  /**
+   * Modo zumbis: liga o diretor de zumbis à rede. O anfitrião simula e envia o
+   * estado; os demais recebem e espelham.
+   */
+  attachZombies(z: ZombieDirector): void {
+    const net = this.d.net;
+    z.net = {
+      get host() {
+        return session.isHost;
+      },
+      get myId() {
+        return session.myId;
+      },
+      targets: () => this.targets(),
+      send: (event, data) => net.send(event, data as never),
+    };
+    const session = this;
+    const on = <K extends keyof ServerEvents>(k: K, h: (data: ServerEvents[K]) => void) => this.unsubscribe.push(net.on(k, h));
+    on('zsync', (m) => {
+      z.applySync(m.wave, m.z);
+      this.d.hud.zombieWave = m.wave;
+      this.d.hud.zombiesLeft = m.z.length / ZOMBIE_FIELDS;
+    });
+    on('zev', (e) => z.applyEvent(e));
+    on('zhit', (m) => z.remoteHit(m.by, m.id, m.mesh, m.damage, m.point, m.dir));
+  }
+
+  /** Jogadores vivos (alvos dos zumbis). */
+  targets(): { id: string; position: THREE.Vector3 }[] {
+    const out: { id: string; position: THREE.Vector3 }[] = [];
+    if (!this.dead) out.push({ id: this.myId, position: this.d.player.position });
+    for (const r of this.remotes.values()) if (r.alive) out.push({ id: r.id, position: r.pos });
+    return out;
   }
 
   /** Entrou na sala: time, posição inicial e jogadores presentes. */
@@ -127,6 +197,9 @@ export class OnlineSession {
     this.teams = MODES[j.room.mode].teams;
     this.d.hud.teams = this.teams;
     this.d.hud.gungame = j.room.mode === 'gungame';
+    this.zombiesMode = j.room.mode === 'zombies';
+    this.d.hud.zombies = this.zombiesMode;
+    this.hostId = j.host ?? '';
     this.d.hud.myId = j.you.id;
     setCamoPalette(j.you.team);
     this.d.hud.setTeam(j.you.team);
@@ -310,7 +383,8 @@ export class OnlineSession {
       player.hurt = Math.min(1, player.hurt + m.amount / 40);
       this.d.audio.play('playerHurt', 0.6);
       this.d.hud.setHealth(m.hp);
-      const from = m.by !== this.myId ? this.remotes.get(m.by)?.pos : m.point ? new THREE.Vector3().fromArray(m.point) : null;
+      // de outro jogador: a posição dele; de explosão/zumbi: o ponto de origem
+      const from = (m.by && m.by !== this.myId ? this.remotes.get(m.by)?.pos : null) ?? (m.point ? new THREE.Vector3().fromArray(m.point) : null);
       if (from) this.onHurtFrom(from.x, from.z);
     } else {
       const r = this.remotes.get(m.target);
@@ -319,7 +393,7 @@ export class OnlineSession {
       if (r && m.by !== this.myId) this.blood(m.point ? new THREE.Vector3().fromArray(m.point) : r.pos.clone().setY(r.pos.y + 1.2), null, 3);
     }
     if (m.by === this.myId && m.target !== this.myId) {
-      this.d.hud.hit(m.zone === 'head', m.hp <= 0);
+      this.onHitMark(m.zone === 'head', m.hp <= 0);
       this.d.audio.play('hitmarker', m.hp <= 0 ? 0.9 : 0.6);
     }
   }
@@ -334,7 +408,7 @@ export class OnlineSession {
       this.dead = true;
       this.d.player.health = 0;
       this.d.hud.setHealth(0);
-      this.d.hud.showDeath(m.killer !== m.victim ? killer : undefined, m.weapon, m.zone, NET.respawnTime);
+      this.d.hud.showDeath(m.killer !== m.victim ? killer : undefined, m.weapon, m.zone, this.zombiesMode ? null : NET.respawnTime);
     } else {
       this.remotes.get(m.victim)?.die(new THREE.Vector3().fromArray(m.dir), ZONE_BONE[m.zone] ?? 'chest');
     }
@@ -367,6 +441,7 @@ export class OnlineSession {
   private onMatch(m: MatchInfo): void {
     // começou uma nova partida (3-2-1): o mapa volta inteiro para todos
     if (m.phase === 'countdown' && this.phase !== 'countdown') this.onRestart();
+    if (this.zombiesMode && m.phase === 'ended' && this.phase === 'playing') this.onGameOver();
     this.phase = m.phase;
     this.d.hud.setMatch(m);
   }
@@ -403,7 +478,7 @@ export class OnlineSession {
   }
 
   private isAlly(r: RemotePlayer): boolean {
-    return this.teams && r.team === this.myTeam;
+    return this.zombiesMode || (this.teams && r.team === this.myTeam);
   }
 
   private serverNow(): number {
