@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { glow } from '../../core/Glow';
 import { createFlashTexture } from '../../textures/WorldTextures';
 
 const FLASH_DURATION = 0.05;
@@ -15,14 +16,17 @@ export class MuzzleFlash {
   private size = 1;
 
   constructor() {
-    this.material = new THREE.MeshBasicMaterial({
-      map: createFlashTexture(),
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      toneMapped: false,
-      side: THREE.DoubleSide,
-    });
+    this.material = glow(
+      new THREE.MeshBasicMaterial({
+        map: createFlashTexture(),
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+        side: THREE.DoubleSide,
+      }),
+      4,
+    );
     const front = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.11), this.material);
     const sideA = new THREE.Mesh(new THREE.PlaneGeometry(0.06, 0.16), this.material);
     sideA.rotation.set(Math.PI / 2, 0, 0);

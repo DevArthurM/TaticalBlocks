@@ -27,9 +27,3 @@ export const VIEWMODEL = {
   fov: 68,
   adsTime: 0.14,
 } as const;
-
-export const WORLD_COLORS = {
-  sky: 0xd6dde6,
-  fogNear: 45,
-  fogFar: 150,
-} as const;

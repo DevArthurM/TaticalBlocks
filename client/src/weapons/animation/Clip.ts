@@ -1,7 +1,11 @@
 import type { SoundName } from '../../audio/SoundEngine';
 import type { AnchorName, PartName, V3 } from '../models/types';
 
-export type Ease = 'linear' | 'in' | 'out' | 'inOut' | 'back';
+/**
+ * `back`: passa do ponto e volta · `snap`: arranca rápido e freia longo ·
+ * `slam`: acelera até bater (encaixes) · `spring`: assenta oscilando · `wind`: recua antes de ir.
+ */
+export type Ease = 'linear' | 'in' | 'out' | 'inOut' | 'back' | 'snap' | 'slam' | 'spring' | 'wind';
 /** [px, py, pz, rx, ry, rz] — deslocamento somado à pose/peça. */
 export type Vec6 = readonly [number, number, number, number, number, number];
 
@@ -41,6 +45,11 @@ export interface Cue {
   sound?: SoundName;
   event?: ClipEvent;
   empty?: boolean;
+  /**
+   * Tranco na arma neste instante (pico do deslocamento [px,py,pz,rx,ry,rz]); uma mola
+   * o devolve. Sem `kick`, o som da marca escolhe um tranco padrão (`CUE_KICKS`).
+   */
+  kick?: Vec6;
 }
 
 export interface Clip {
@@ -75,6 +84,14 @@ const EASES: Record<Ease, (x: number) => number> = {
     const c1 = 1.70158;
     const c3 = c1 + 1;
     return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  },
+  snap: (x) => 1 - Math.pow(1 - x, 4),
+  slam: (x) => x * x * x,
+  // mola subamortecida: chega em ~40% do trecho, passa ~12% e assenta
+  spring: (x) => 1 - Math.exp(-7 * x) * Math.cos(9.5 * x) * (1 - x),
+  wind: (x) => {
+    const c1 = 1.70158;
+    return (c1 + 1) * x * x * x - c1 * x * x;
   },
 };
 

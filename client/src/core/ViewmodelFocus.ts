@@ -78,8 +78,9 @@ export class ViewmodelFocus {
   /**
    * Desenha o viewmodel com foco. `amount` 0..1 (0 = sem efeito, o chamador deve
    * desenhar direto). Raio nítido e desfoque escalam com a altura da imagem.
+   * `output`: onde compor (padrão: a tela; no pós-processamento, o alvo HDR).
    */
-  render(scene: THREE.Scene, camera: THREE.Camera, amount: number): void {
+  render(scene: THREE.Scene, camera: THREE.Camera, amount: number, output: THREE.WebGLRenderTarget | null = null): void {
     const r = this.renderer;
     const h = this.target.height;
     const u = this.material.uniforms;
@@ -93,7 +94,8 @@ export class ViewmodelFocus {
     r.setClearColor(0x000000, 0);
     r.clear();
     r.render(scene, camera);
-    r.setRenderTarget(null);
+    // (num alvo HDR o three.js não aplica a curva de filme nem sRGB: a cor segue linear)
+    r.setRenderTarget(output);
     r.setClearColor(this.clear, alpha);
     r.render(this.scene, this.camera);
   }

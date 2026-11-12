@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { glow } from '../core/Glow';
 
 export type ParticleKind = 'dust' | 'spark' | 'fire' | 'smoke' | 'debris';
 
@@ -41,8 +42,8 @@ export class ParticleSystem {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mats: Record<ParticleKind, THREE.Material> = {
       dust: new THREE.MeshBasicMaterial({ color: 0xffffff }),
-      spark: new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
-      fire: new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
+      spark: glow(new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }), 5),
+      fire: glow(new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }), 3.5),
       smoke: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1 }),
       debris: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }),
     };

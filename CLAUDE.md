@@ -9,7 +9,7 @@ Guia para trabalhar neste repositório. O `README.md` traz a documentação para
 - **Arsenal:** cerca de 40 armas com modelos voxel procedurais, recarga animada arma a arma, inspeção (V), menu radial de loadout (B) e acessórios (T).
 - **Mapa:** Pátio Voxel, arena PvP 1v1 com cobertura destrutível (único mapa).
 - **Destruição:** voxels destrutíveis, detritos com física e decalques.
-- **Zumbis:** ondas de inimigos com variantes procedurais de roupa e pele, dano por parte do corpo e ragdoll.
+- **Zumbis:** ondas de inimigos com variantes procedurais de roupa e pele, dano por parte do corpo e ragdoll. Começa com $0 e a faca; abates dão dinheiro para a loja (B). Morrer no solo, ou todos morrerem no online, é fim de jogo.
 - **Movimento:** corrida, agachar, deslize (Shift + C), inclinar (Q/E), escalar quinas e recuo que sobe a câmera.
 - **Online:** salas 1v1, 5v5, 10v10, 1 contra todos, Gun Game e Zumbis cooperativo (até 5), com servidor autoritativo em WebSocket.
 
@@ -55,7 +55,7 @@ server/src/
   game/      gateway WebSocket em /server, RoomsService (sessões, salas, tick 20 Hz), Room (regras), validate.ts
 
 client/src/
-  core/      Game (loop e orquestração), RendererSystem, Input, Spring, pós-processos (ViewmodelFocus, WorldBlur)
+  core/      Game (loop e orquestração), RendererSystem, Input, Spring, pós-processos (ViewmodelFocus, WorldBlur), post/ (shaders HDR)
   player/    PlayerController (movimento, deslize, inclinação), colisão AABB, LedgeClimb, PlayerBody (pés e torso visíveis)
   weapons/   WeaponManager → logic/ (Firearm, Inventory, ArmRecoil) → view/ (Viewmodel, braços, clarão, cápsulas)
              models/ (DSL ModelBuilder, um arquivo por categoria, attachments.ts) · animation/ (Clip, reloads, actions)
@@ -78,10 +78,16 @@ Aliases: o cliente importa `@shared/...` (alias do Vite e do tsconfig). O servid
 - **Pré-compilação de shaders:** `renderer.compileAsync` roda no carregamento, com timeout. Luzes que acendem e apagam (clarão, lanterna `SpotLight`) ficam sempre na cena com intensidade 0, para não recompilar shaders.
 - **Resolução dinâmica:** o pixel ratio varia conforme o tempo de quadro.
 - **Viewmodel:** a arma em primeira pessoa é desenhada numa passada própria. Há pós-processos em render target: desfoque de foco na mira de ferro e desfoque do mundo no menu T.
+- **Shaders (pós-processamento HDR):** `core/post/PostFX.ts` (GLSL em `shaders.ts`). Ordem: mundo em HDR + profundidade → SSAO → raios de sol → composição (névoa volumétrica, desfoque do menu T) → viewmodel por cima → bloom → imagem final (gradação, ACES, sRGB) → FXAA. Há **dois caminhos** em `RendererSystem.render`: com shaders (tudo acima; `scene.fog` fica `null` e a curva de filme é a do passo final) e sem shaders (desenho direto, ACES e névoa do three.js). Qualquer efeito novo precisa funcionar nos dois, ou ser opcional.
+- **Céu e clima:** `world/Sky.ts` é uma cúpula procedural que não escreve profundidade (no pós-processamento, profundidade 1 = céu, sem névoa nem oclusão). `world/Atmosphere.ts` é a fonte única das cores de sol, céu e névoa.
+- **Emissivos:** materiais que brilham (faísca, fogo, clarão) são registrados com `glow()` (`core/Glow.ts`); em HDR ganham cor acima de 1 para acender o bloom.
 
 ### Armas
 - **Modelos procedurais:** `ModelBuilder` é uma DSL de caixas e cilindros com `part`, `anchor` e `irons()`. As âncoras (muzzle, eject, grip, support, sight, mag…) ligam modelo, animação, efeitos e IK dos braços. `irons()` marca alça e massa, que são escondidas quando a arma tem mira óptica.
 - **Animação por código:** keyframes (`Clip`) e molas (`Spring`). Cada arma define sua recarga em `reloads.ts`: por pente, cartucho a cartucho, ferrolho, revólver bala a bala etc.
+  - **Trancos:** cada marca de som de um clipe (`magIn`, `chargeRelease`, `pumpBack`…) dá um impulso numa mola de 6 eixos do `Viewmodel` (`CUE_KICKS`, ou `kick` na própria marca). Não anime a reação da arma com chaves; coloque a marca e use o easing `slam` na peça que bate.
+  - **Recarga tática × vazia:** recargas de pente geram dois clipes (`clip` e `tactical`, sem o manejo do ferrolho). A arma sobe e rola com o alojamento do pente virado para a câmera (rz negativo), para a troca acontecer dentro do quadro.
+  - **Camadas procedurais:** recuo (rolagem e desvio aleatórios por tiro), balanço do olhar, corrida, pulo/queda e agachar usam molas com ultrapassagem (`Follow`). As mãos em trânsito fazem um arco (`HAND_ARC`). A troca de arma abaixa a antiga (`HOLSTER_CLIP`) antes do saque (`drawClip`).
 - **Mira:** a alça e a massa ficam sempre no centro da tela; o balanço gira os braços em torno do eixo da mira (`SIGHT_AXIS`). O recuo sobe a câmera.
 - **Acessórios:** catálogo, compatibilidade e modificadores de stats ficam em `shared/weapons/attachments.ts`; a aplicação no modelo fica em `weapons/models/attachments.ts`. A escolha é salva no `localStorage` (`fps.attachments`) e enviada no estado online como string codificada.
 
@@ -101,7 +107,8 @@ Aliases: o cliente importa `@shared/...` (alias do Vite e do tsconfig). O servid
   - O servidor valida os disparos (registro de tiros, cadência pelo rpm, pellets, alcance, time, arma do Gun Game) e calcula o dano como dano da arma × multiplicador da zona.
 - **Conexões mortas:** o cliente envia heartbeat a cada 3 s e o servidor encerra conexões ociosas após 10 s. O servidor também limita a 120 mensagens/s por sessão.
 - **Modos:** definidos em `MODES` (`protocol.ts`). Fogo amigo só existe nos modos com times. O Gun Game usa `GUNGAME_LADDER`: abate de faca rebaixa a vítima, e matar com a faca no último nível vence.
-- **Zumbis online:** um jogador (anfitrião, trocado se sair) roda o `ZombieDirector` e envia `zsync` (estado compacto, `ZOMBIE_FIELDS`) e `zev`; os outros espelham (`Zombie.puppetUpdate`) e mandam acertos por `zhit` (índice da malha). Golpes dos zumbis viram `zatk` e o servidor aplica o dano.
+- **Zumbis online:** um jogador (anfitrião, trocado se sair) roda o `ZombieDirector` e envia `zsync` (estado compacto, `ZOMBIE_FIELDS`) e `zev`; os outros espelham (`Zombie.puppetUpdate`) e mandam acertos por `zhit` (índice da malha). Golpes dos zumbis viram `zatk` e o servidor aplica o dano. O saldo é do servidor (preços em `shared/weapons/economy.ts`, compra `buy`/`bought`); os mortos renascem no evento de onda.
+- **PvP:** sem armas pesadas nem granadas (`pvpAllowed`), filtrado no arsenal e recusado no servidor.
 
 ## Convenções
 
@@ -109,5 +116,6 @@ Aliases: o cliente importa `@shared/...` (alias do Vite e do tsconfig). O servid
 - **Mudanças no protocolo:** atualize `ClientEvents`/`ServerEvents`, a validação em `server/src/game/validate.ts` e `OnlineSession` juntos.
 - **Assets:** prefira geração procedural (geometria, texturas em canvas, som em WebAudio) a arquivos externos.
 - **GIFs do menu B:** os GIFs em `client/public/weapons/gifs/` são pré-renderizados. Se um modelo mudar, regenere em `/tools/gifs.html`.
+- **Opções gráficas:** cada efeito novo entra em `settings/Settings.ts` (campo, `GRAPHICS_PRESETS`, `sanitize`) e no menu (`CHOICES` em `SettingsMenu.ts`); as predefinições vão de `minimo` (sem shaders) a `ultra`.
 - **README:** mantenha atualizadas as seções que descrevem cada sistema.
 - **Git:** commit e push apenas quando pedido.

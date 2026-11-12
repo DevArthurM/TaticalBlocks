@@ -1,8 +1,10 @@
 import type { ShellType, WeaponDef } from '@shared/weapons/types';
 import * as THREE from 'three';
 import { clamp, damp, lerp } from '../../core/math';
-import { Spring } from '../../core/Spring';
-import { addSample6, type Clip, type Cue, type HandValue, type Key, isVisible, segment } from '../animation/Clip';
+import { Follow, Spring } from '../../core/Spring';
+import type { SoundName } from '../../audio/SoundEngine';
+import { HOLSTER_CLIP } from '../animation/actions';
+import { addSample6, type Clip, type Cue, type HandValue, type Key, type Vec6, isVisible, segment } from '../animation/Clip';
 import type { AttachmentSlot, WeaponAttachments } from '@shared/weapons/attachments';
 import { applyAttachments } from '../models/attachments';
 import { buildWeaponModel } from '../models/registry';
@@ -23,6 +25,10 @@ export interface ViewmodelFrame {
   sprinting: boolean;
   /** 0..1 — deslizando. */
   slide?: number;
+  /** Velocidade vertical do jogador em m/s (+ = subindo): a arma atrasa no pulo e na queda. */
+  vertical?: number;
+  /** 0..1 — agachado: a arma afunda ao descer e levanta ao subir. */
+  crouch?: number;
   /** 0..1 — modo de personalização (T): arma na frente da câmera. */
   customize?: number;
   onGround: boolean;
@@ -75,6 +81,38 @@ const STRAFE_SPRING = {
   ads: { stiffness: 20, damping: 2 * Math.sqrt(20) * 1.1 },
 } as const;
 const SLIDE_BACK_TIME = 0.035;
+/** Tempo máximo para abaixar a arma antiga antes de sacar a nova. */
+const HOLSTER_TIME = 0.12;
+
+/**
+ * Tranco padrão de cada som de manejo (pico do deslocamento [px,py,pz,rx,ry,rz]):
+ * a arma reage a cada contato — pente batendo, ferrolho fechando, telha indo e vindo.
+ * +z = para trás (em direção à câmera), +rx = cano sobe, +rz = rola para a esquerda.
+ */
+const CUE_KICKS: Partial<Record<SoundName, Vec6>> = {
+  magOut: [0, 0.004, 0, 0.018, 0, -0.025],
+  magIn: [0, 0.015, 0.003, -0.05, 0, 0.035],
+  slideBack: [0, 0.002, 0.012, 0.045, 0, 0.02],
+  chargeBack: [0, 0.002, 0.012, 0.035, 0.01, 0.025],
+  slideRelease: [0, -0.002, -0.012, -0.04, 0, -0.025],
+  chargeRelease: [0, -0.002, -0.013, -0.035, -0.01, -0.03],
+  pumpBack: [0, -0.003, 0.016, 0.035, 0, 0.02],
+  pumpForward: [0, 0.002, -0.016, -0.035, 0, -0.02],
+  boltUp: [0, 0.003, 0, 0.01, 0, 0.05],
+  boltBack: [0, 0, 0.012, 0.03, 0.015, 0],
+  boltForward: [0, 0, -0.012, -0.025, -0.01, 0],
+  boltDown: [0, -0.003, 0, -0.01, 0, -0.055],
+  shellInsert: [0, 0.005, -0.004, -0.022, 0, 0.018],
+  cylinderOpen: [-0.006, 0, 0, 0, 0.02, 0.06],
+  cylinderClose: [0.008, 0, 0, 0, -0.02, -0.07],
+  coverOpen: [0, 0.004, 0.004, 0.035, 0, 0],
+  coverClose: [0, -0.012, 0, -0.055, 0, 0],
+  beltIn: [0, -0.004, 0, -0.015, 0, 0.02],
+  rocketLoad: [0, 0, 0.016, 0.04, 0, 0],
+};
+
+/** Quanto cada categoria reage aos trancos (arma leve sacode mais). */
+const KICK_SCALE: Record<string, number> = { pistol: 1.25, smg: 1, rifle: 0.9, shotgun: 0.95, sniper: 0.8, heavy: 0.6, melee: 1, throwable: 1 };
 const SLIDE_RETURN_TIME = 0.07;
 
 /** Braços + arma em primeira pessoa e toda a mistura de animações procedurais e por clipes. */
@@ -107,12 +145,27 @@ export class Viewmodel {
     grip?: { right: THREE.Matrix4; left: THREE.Matrix4 };
   } | null = null;
   private action: ActionPlayback | null = null;
+  /** Arma nova esperando a antiga terminar de ser abaixada. */
+  private pending: { def: WeaponDef | null; drawClip: Clip; drawTime: number } | null = null;
   private reloadPrev = { key: '', t: 0 };
   private modelHidden = false;
 
   private readonly recoilPos = new Spring(320, 26);
   private readonly recoilRot = new Spring(260, 20);
   private readonly landing = new Spring(180, 14);
+  /** Rolagem e desvio lateral aleatórios de cada tiro (a arma não recua sempre igual). */
+  private readonly recoilRoll = new Spring(200, 14);
+  private readonly recoilSide = new Spring(220, 17);
+  /** Mola de 6 eixos dos trancos de manejo (marcas dos clipes). */
+  private readonly jolt = [0, 1, 2, 3, 4, 5].map((i) => (i < 3 ? new Spring(260, 19) : new Spring(230, 16)));
+  /** Pose de corrida com ultrapassagem (o peso `sprintT` continua suave). */
+  private readonly sprintPose = new Follow(11, 0.62);
+  /** Arma atrasada em relação ao corpo no pulo/queda. */
+  private readonly air = new Follow(9, 0.7);
+  private readonly swayXF = new Follow(15, 0.55);
+  private readonly swayYF = new Follow(15, 0.55);
+  private prevCrouch = 0;
+  private prevAds = 0;
   private sprintT = 0;
   private bobPhase = 0;
   private bobAmount = 0;
@@ -171,6 +224,19 @@ export class Viewmodel {
 
   /** Troca a arma exibida e toca o saque. */
   equip(def: WeaponDef | null, drawClip: Clip | null, drawTime: number): void {
+    // arma visível na mão: primeiro ela desce (guardar) e a troca acontece fora do quadro
+    if (drawClip && this.current && !this.modelHidden && this.root.visible && drawTime > 0.1) {
+      const holster = Math.min(HOLSTER_TIME, drawTime * 0.3);
+      // troca em cima de outra troca: mantém a descida que já está em curso
+      if (!this.pending) this.play(HOLSTER_CLIP, holster);
+      this.pending = { def, drawClip, drawTime: drawTime - holster };
+      return;
+    }
+    this.pending = null;
+    this.swap(def, drawClip, drawTime);
+  }
+
+  private swap(def: WeaponDef | null, drawClip: Clip | null, drawTime: number): void {
     if (this.current) this.poseGroup.remove(this.current.model.root);
     this.flash.attach(undefined, 0);
     this.current = null;
@@ -242,7 +308,8 @@ export class Viewmodel {
     const old = this.cache.get(id);
     if (!old) return;
     this.cache.delete(id);
-    if (this.current?.def.id === id) {
+    // (durante o guardar a arma antiga já está saindo: o modelo novo nasce no saque)
+    if (this.current?.def.id === id && !this.pending) {
       const def = this.current.def;
       this.equip(def, null, 0);
     }
@@ -301,8 +368,11 @@ export class Viewmodel {
 
   onFire(recoilPitch: number, adsT: number, lastRound: boolean, shell: ShellType, ejectNow: boolean): void {
     const k = lerp(1, 0.55, adsT) * clamp(recoilPitch / 0.022, 0.4, 3);
+    const kr = Math.min(k, 1.8);
     this.recoilPos.impulse(0.95 * k);
-    this.recoilRot.impulse(1.4 * Math.min(k, 1.8));
+    this.recoilRot.impulse(1.4 * kr);
+    this.recoilRoll.impulse((Math.random() * 2 - 1) * kr);
+    this.recoilSide.impulse((Math.random() * 2 - 1) * 0.8 * kr);
     this.slideTimer = 0;
     this.slideLocked = lastRound && this.current?.model.view.slideTravel !== undefined;
     this.flash.trigger();
@@ -312,6 +382,7 @@ export class Viewmodel {
 
   onDryFire(): void {
     this.recoilRot.impulse(0.4);
+    this.kick([0, -0.001, 0, -0.008, 0, 0.012]);
   }
 
   onReloadComplete(): void {
@@ -343,7 +414,20 @@ export class Viewmodel {
     return true;
   }
 
+  /** Tranco na arma (pico do deslocamento); a mola de 6 eixos devolve com um leve balanço. */
+  kick(v: Vec6, scale = 1): void {
+    const s = scale * (KICK_SCALE[this.current?.def.category ?? ''] ?? 1);
+    // resposta ao impulso de uma mola com ζ≈0,55: pico ≈ v/(2ω) → v = 2ω·pico
+    for (let i = 0; i < 6; i++) this.jolt[i].impulse(v[i] * s * 2 * Math.sqrt(this.jolt[i].stiffness));
+  }
+
   update(f: ViewmodelFrame): void {
+    // a arma antiga terminou de descer (ou a descida foi cancelada): troca e saca a nova
+    if (this.pending && (!this.action || this.action.time + f.dt >= this.action.duration)) {
+      const p = this.pending;
+      this.pending = null;
+      this.swap(p.def, p.drawClip, p.drawTime);
+    }
     const cur = this.current;
     this.flash.update(f.dt);
     // laser: intensidade oscila com ruído de Perlin 1D em loop
@@ -394,20 +478,53 @@ export class Viewmodel {
     // ── pose base ──
     const view = cur.model.view;
     const reloading = !!f.reload;
-    this.sprintT = damp(this.sprintT, f.sprinting && !reloading ? 1 : 0, 9, f.dt);
+    const sprintOn = f.sprinting && !reloading;
+    this.sprintT = damp(this.sprintT, sprintOn ? 1 : 0, 9, f.dt);
+    const sprintP = this.sprintPose.update(sprintOn ? 1 : 0, f.dt);
     this.recoilPos.update(f.dt);
     this.recoilRot.update(f.dt);
-    if (f.landingImpact > 2) this.landing.impulse(-Math.min(f.landingImpact, 12) * 0.05);
+    this.recoilRoll.update(f.dt);
+    this.recoilSide.update(f.dt);
+    for (const j of this.jolt) j.update(f.dt);
+    if (f.landingImpact > 2) {
+      const hit = Math.min(f.landingImpact, 12);
+      this.landing.impulse(-hit * 0.05);
+      // a arma "cabeceia" ao aterrissar
+      this.kick([0, 0, 0, -0.006 * hit, 0, 0.004 * hit], 1 - f.adsT * 0.7);
+    }
+    // agachar/levantar: a arma atrasa em relação ao corpo
+    const crouch = f.crouch ?? 0;
+    this.landing.impulse(-(crouch - this.prevCrouch) * 0.3);
+    this.prevCrouch = crouch;
     this.landing.update(f.dt);
+    // chegou na mira: um assento curto para trás
+    if (f.adsT >= 1 && this.prevAds < 1) this.kick([0, 0, 0.004, 0, 0, 0]);
+    this.prevAds = f.adsT;
 
-    this.pos.set(...view.hipPos).lerp(cur.ads, f.adsT);
-    this.rot.set(...view.hipRot).multiplyScalar(1 - f.adsT);
-    this.tmpA.copy(SPRINT_OFFSET.pos).multiplyScalar(this.sprintT);
+    // mira: curva suave (arranca e assenta) com um arco — a arma inclina e afunda no meio do caminho
+    const ads = smooth01(f.adsT);
+    const adsArc = Math.sin(Math.PI * f.adsT);
+    this.pos.set(...view.hipPos).lerp(cur.ads, ads);
+    this.rot.set(...view.hipRot).multiplyScalar(1 - ads);
+    this.pos.y -= adsArc * 0.008;
+    this.tmpA.copy(SPRINT_OFFSET.pos).multiplyScalar(sprintP);
     this.pos.add(this.tmpA);
-    this.tmpA.copy(SPRINT_OFFSET.rot).multiplyScalar(this.sprintT * (cur.def.category === 'heavy' ? 0.5 : 1));
+    this.tmpA.copy(SPRINT_OFFSET.rot).multiplyScalar(sprintP * (cur.def.category === 'heavy' ? 0.5 : 1));
     this.rot.add(this.tmpA);
 
-    this.sightRoll = 0;
+    this.sightRoll = adsArc * 0.06;
+    const hipK = 1 - f.adsT;
+    // agachado: arma levemente deitada
+    this.rot.z += crouch * 0.05 * hipK;
+    // pulo/queda: subindo a arma fica para baixo; caindo ela sobe e o cano levanta
+    const air = this.air.update(f.onGround ? 0 : clamp(f.vertical ?? 0, -9, 6), f.dt) * (1 - f.adsT * 0.75);
+    this.pos.y -= air * 0.0035;
+    this.rot.x -= air * 0.012;
+    this.rot.z += air * 0.006 * hipK;
+    // recuo: rolagem em torno da visada e um desvio lateral diferentes a cada tiro
+    this.sightRoll += this.recoilRoll.value * 0.5;
+    this.pos.x += this.recoilSide.value * 0.08 * hipK;
+    this.rot.y += this.recoilSide.value * 0.2 * hipK;
     // deslize: arma inclina para o lado e desce um pouco (mirando, gira em torno da visada)
     const slide = f.slide ?? 0;
     this.pos.y -= slide * 0.03 * (1 - f.adsT);
@@ -442,8 +559,15 @@ export class Viewmodel {
     }
 
     const p = this.pose;
-    this.poseGroup.position.set(this.pos.x + p[0], this.pos.y + p[1] + this.landing.value, this.pos.z + p[2] + this.recoilPos.value * 0.04);
-    this.poseGroup.rotation.set(this.rot.x + p[3] + this.recoilRot.value * 0.035, this.rot.y + p[4], this.rot.z + p[5]);
+    const j = this.jolt;
+    // mirando o recuo de inclinação fica com a mola do braço (a visada não pode sair do alvo sozinha)
+    const kickRot = this.recoilRot.value * lerp(RECOIL_VIEW.rot, RECOIL_VIEW.rotAds, f.adsT);
+    this.poseGroup.position.set(
+      this.pos.x + p[0] + j[0].value,
+      this.pos.y + p[1] + j[1].value + this.landing.value,
+      this.pos.z + p[2] + j[2].value + this.recoilPos.value * RECOIL_VIEW.back,
+    );
+    this.poseGroup.rotation.set(this.rot.x + p[3] + j[3].value + kickRot, this.rot.y + p[4] + j[4].value, this.rot.z + p[5] + j[5].value);
     // balanço do movimento: gira tudo em torno do eixo da visada (a mira não sai do centro)
     if (this.sightRoll !== 0) {
       this.rollQ.setFromAxisAngle(SIGHT_AXIS, this.sightRoll);
@@ -587,7 +711,11 @@ export class Viewmodel {
     if (!clip.cues) return;
     for (const cue of clip.cues) {
       if (cue.empty && !empty) continue;
-      if (prev < cue.t && t >= cue.t) this.onCue(cue);
+      if (prev < cue.t && t >= cue.t) {
+        const kick = cue.kick ?? (cue.sound ? CUE_KICKS[cue.sound] : undefined);
+        if (kick) this.kick(kick);
+        this.onCue(cue);
+      }
     }
   }
 
@@ -647,6 +775,14 @@ export class Viewmodel {
     this.resolveTarget(a.v, side, this.tmpA);
     this.resolveTarget(b.v, side, this.tmpB);
     out.lerpVectors(this.tmpA, this.tmpB, u);
+    // mão em trânsito entre dois pontos: faz um arco (afasta da arma, vem para o corpo e desce)
+    // em vez de cortar em linha reta por dentro do modelo
+    if (a.v.a !== b.v.a) {
+      const lift = Math.sin(Math.PI * u) * Math.min(HAND_ARC.max, this.tmpA.distanceTo(this.tmpB) * HAND_ARC.ratio);
+      out.x += (side === 'left' ? -0.4 : 0.4) * lift;
+      out.y -= 0.5 * lift;
+      out.z += lift;
+    }
   }
 
   private resolveTarget(v: HandValue, side: 'left' | 'right', out: THREE.Vector3): void {
@@ -656,26 +792,47 @@ export class Viewmodel {
     if (fixed) out.copy(fixed[side]);
     else if (anchor) anchor.getWorldPosition(out);
     else out.copy(FIXED_TARGETS.rest[side]);
-    if (v.o) out.add(this.tmpB.set(v.o[0], v.o[1], v.o[2]));
+    // (sem vetor temporário: `out` pode ser o próprio tmpB)
+    if (v.o) out.set(out.x + v.o[0], out.y + v.o[1], out.z + v.o[2]);
   }
 
   private applyBob(f: ViewmodelFrame): void {
     const moving = f.onGround ? clamp(f.moveSpeed / 4.6, 0, 1.7) : 0;
     this.bobAmount = damp(this.bobAmount, moving, 8, f.dt);
     this.bobPhase += f.dt * lerp(8.5, 12.5, this.sprintT) * (moving > 0.05 ? 1 : 0);
-    const amp = this.bobAmount * (1 + this.sprintT * 1.4);
+    const amp = this.bobAmount;
+    // passo: um "8" deitado — vai de um lado ao outro e afunda duas vezes por ciclo (uma por pé)
     const s = Math.sin(this.bobPhase);
-    const c = Math.cos(this.bobPhase);
+    const dip = 0.5 - 0.5 * Math.cos(this.bobPhase * 2);
+    // o cano atrasa um pouco em relação ao corpo
+    const lag = Math.sin(this.bobPhase - 0.6);
     // quadril: a arma balança solta; mirando: só gira em torno da visada
     const free = 1 - f.adsT;
-    this.pos.x += s * 0.007 * amp * free;
-    this.pos.y += -Math.abs(c) * 0.0065 * amp * free;
-    this.rot.z += s * 0.025 * amp * free;
-    this.rot.x += Math.abs(c) * 0.01 * amp * free;
+    const walk = amp * (1 - this.sprintT * 0.4) * free;
+    this.pos.x += s * 0.007 * walk;
+    this.pos.y -= dip * 0.0075 * walk;
+    this.pos.z += dip * 0.003 * walk;
+    this.rot.z += lag * 0.028 * walk;
+    this.rot.y += lag * 0.012 * walk;
+    this.rot.x += dip * 0.012 * walk;
     this.sightRoll += s * 0.03 * amp * f.adsT;
+    // corrida: a arma bombeia de um lado ao outro e sobe/desce com os braços
+    const run = amp * this.sprintT * free;
+    this.pos.x += s * 0.022 * run;
+    this.pos.y -= dip * 0.02 * run;
+    this.pos.z += lag * 0.012 * run;
+    this.rot.y += lag * 0.07 * run;
+    this.rot.x += (dip - 0.5) * 0.07 * run;
+    this.rot.z += s * 0.05 * run;
+    // parado: respiração + uma deriva lenta (a mão nunca fica imóvel)
     const breathe = 1 - f.adsT * 0.85;
-    this.pos.y += Math.sin(f.time * 1.7) * 0.0012 * breathe;
-    this.rot.x += Math.sin(f.time * 1.7 + 0.6) * 0.004 * breathe;
+    const t = f.time;
+    this.pos.y += Math.sin(t * 1.7) * 0.0012 * breathe;
+    this.rot.x += Math.sin(t * 1.7 + 0.6) * 0.004 * breathe;
+    this.pos.x += Math.sin(t * 0.83 + 1.3) * 0.0008 * breathe;
+    this.rot.y += Math.sin(t * 0.61 + 0.4) * 0.0035 * free;
+    this.rot.z += Math.sin(t * 1.07 + 2) * 0.005 * free;
+    this.sightRoll += Math.sin(t * 1.07 + 2) * 0.004 * f.adsT;
   }
 
   /**
@@ -719,15 +876,18 @@ export class Viewmodel {
 
   private applySway(f: ViewmodelFrame): void {
     const k = lerp(1, 0.3, f.adsT);
-    this.swayX = damp(this.swayX, clamp(-f.lookDX * 0.0003, -0.025, 0.025) * k, 9, f.dt);
-    this.swayY = damp(this.swayY, clamp(f.lookDY * 0.0003, -0.025, 0.025) * k, 9, f.dt);
+    // o alvo segue o mouse; a mola atrasa a arma, passa um pouco do ponto ao parar e assenta
+    this.swayX = damp(this.swayX, clamp(-f.lookDX * 0.0003, -0.025, 0.025) * k, 16, f.dt);
+    this.swayY = damp(this.swayY, clamp(f.lookDY * 0.0003, -0.025, 0.025) * k, 16, f.dt);
+    const sx = this.swayXF.update(this.swayX, f.dt);
+    const sy = this.swayYF.update(this.swayY, f.dt);
     const free = 1 - f.adsT;
-    this.pos.x += this.swayX * free;
-    this.pos.y += this.swayY * free;
-    this.rot.y += this.swayX * 2.4 * free;
-    this.rot.z -= this.swayX * 1.6 * free;
-    this.rot.x -= this.swayY * 1.6 * free;
-    this.sightRoll -= this.swayX * 1.6 * f.adsT;
+    this.pos.x += sx * free;
+    this.pos.y += sy * free;
+    this.rot.y += sx * 2.4 * free;
+    this.rot.z -= sx * 1.6 * free;
+    this.rot.x -= sy * 1.6 * free;
+    this.sightRoll -= sx * 1.6 * f.adsT;
   }
 
   private readonly vmLights: { light: THREE.Light; base: number }[] = [];
@@ -795,6 +955,12 @@ const smooth01 = (x: number): number => {
   const k = Math.min(1, Math.max(0, x));
   return k * k * (3 - 2 * k);
 };
+
+/** Quanto as molas do recuo deslocam a arma: recuo para trás (m) e inclinação (rad) no quadril / mirando. */
+const RECOIL_VIEW = { back: 0.3, rot: 0.18, rotAds: 0.05 };
+
+/** Arco da mão em trânsito: fração da distância percorrida e teto (m). */
+const HAND_ARC = { ratio: 0.22, max: 0.06 };
 
 /** Inclinação do cano (rad) andando para a frente na velocidade de caminhada. */
 const FORWARD_TILT = 0.06;

@@ -361,11 +361,11 @@ export class OnlineSession {
     const origin = new THREE.Vector3().fromArray(m.origin);
     const vel = new THREE.Vector3().fromArray(m.vel);
     if (m.kind === 'launch' && def?.kind === 'firearm' && def.projectile) {
-      this.d.projectiles.launchWithVelocity(def.projectile, origin, vel, def.id, true);
+      this.d.projectiles.launchWithVelocity(def.projectile, origin, vel, def.id, true, m.by);
       this.remotes.get(m.by)?.onShot();
       this.d.audio.at(origin.x, origin.z, 160, (v) => this.d.audio.shot(def.sound, Math.min(1, v * 1.3)));
     } else if (m.kind === 'throw' && def?.kind === 'throwable') {
-      this.d.projectiles.throwItem(def.id, def.effect, m.fuse, origin, vel, true);
+      this.d.projectiles.throwItem(def.id, def.effect, m.fuse, origin, vel, true, m.by);
       this.remotes.get(m.by)?.onThrow();
     }
   }

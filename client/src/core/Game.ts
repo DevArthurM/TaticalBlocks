@@ -17,7 +17,7 @@ import { type AttachmentSlot, encodeAttachments } from '@shared/weapons/attachme
 import { Footsteps } from '../audio/Footsteps';
 import { PlayerController } from '../player/PlayerController';
 import { HUD, type InspectView } from '../ui/HUD';
-import { effectiveFov, SHADOW_MAP_SIZE, SettingsStore } from '../settings/Settings';
+import { ANTIALIAS_MODE, AO_LEVEL, CLOUD_LEVEL, effectiveFov, SHADOW_MAP_SIZE, SettingsStore } from '../settings/Settings';
 import { ArsenalWheel } from '../ui/arsenal/ArsenalWheel';
 import { SettingsMenu } from '../ui/settings/SettingsMenu';
 import { Explosions } from '../weapons/combat/Explosions';
@@ -158,11 +158,12 @@ export class Game {
     this.explosions = new Explosions(this.gfx.scene, this.particles, decals, this.audio, this.gfx.camera, world.hitTargets, {
       shake: (a) => this.player.shake(a),
       blind: (a) => this.hud.addBlind(a),
-      blast: (pos, radius) => {
+      blast: (pos, radius, source) => {
         this.destruction.explode(pos, radius);
         this.crates.blast(pos, radius * 1.3, 9);
         this.debris.blast(pos, radius, 8);
-        this.zombies.blast(pos, radius * 1.1, 160);
+        // modo zumbis online: o abate (e o dinheiro) vai para quem lançou
+        this.zombies.blast(pos, radius * 1.1, 160, source.remote ? (source.owner ?? '') : (this.session?.myId ?? ''));
       },
       detonated: (kind, pos, source) => this.session?.onDetonated(kind, pos, source),
     });
@@ -237,6 +238,7 @@ export class Game {
     );
     this.zombies.blood = this.blood;
     this.weapons.viewmodel.setLightScale(world.env.viewmodelLight);
+    this.gfx.atmosphere = world.env.atmosphere;
     this.hud.setOnlineMode(this.onlineMode);
     // sair da partida: volta ao menu principal (online: desconecta; solo: recomeça do zero)
     this.hud.onExitMatch = () => {
@@ -257,6 +259,12 @@ export class Game {
       this.gfx.setRenderScale(s.graphics.renderScale);
       this.gfx.setDynamicResolution(s.graphics.dynamicResolution);
       this.gfx.setShadows(world.sun, SHADOW_MAP_SIZE[s.graphics.shadows]);
+      // shaders: pós-processamento HDR e seus efeitos; nuvens valem com ou sem ele
+      const g = s.graphics;
+      this.gfx.setPost(g.shaders, { ao: AO_LEVEL[g.ao], bloom: g.bloom, godRays: g.godRays, antialias: ANTIALIAS_MODE[g.antialias] });
+      world.env.sky.setClouds(CLOUD_LEVEL[g.clouds]);
+      this.gfx.setFpsLimit(g.fpsLimit);
+      this.frameInterval = g.fpsLimit > 0 ? 1000 / g.fpsLimit : 0;
       this.player.sensitivity = s.sensitivity;
       this.player.adsSensitivity = s.adsSensitivity;
       this.player.leanMode = s.leanMode;
@@ -410,7 +418,17 @@ export class Game {
     this.menu.setStatus(saved.source === 'server' ? 'Loadout salvo no servidor ✓' : 'Servidor offline — salvo localmente');
   }
 
+  /** Limite de FPS: intervalo mínimo entre quadros em ms (0 = sem limite). */
+  private frameInterval = 0;
+  private lastFrameAt = 0;
+
   private readonly frame = (): void => {
+    if (this.frameInterval > 0) {
+      // o navegador chama na taxa do monitor: pula as chamadas que chegam cedo demais
+      const now = performance.now();
+      if (now - this.lastFrameAt < this.frameInterval - 1.5) return;
+      this.lastFrameAt = now;
+    }
     const rawDt = this.clock.getDelta();
     const dt = Math.min(rawDt, 1 / 20);
     this.gfx.adaptResolution(rawDt);

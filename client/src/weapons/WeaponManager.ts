@@ -10,7 +10,7 @@ import { approach, damp, lerp } from '../core/math';
 import type { Decals } from '../effects/Decals';
 import type { ParticleSystem } from '../effects/ParticleSystem';
 import type { PlayerController } from '../player/PlayerController';
-import { boltCycle, DRAW_CLIP, INSPECT_REVEAL, inspectClip, MELEE_CLIPS, pumpCycle, throwClip } from './animation/actions';
+import { boltCycle, drawClip, INSPECT_REVEAL, inspectClip, MELEE_CLIPS, pumpCycle, throwClip } from './animation/actions';
 import { ammoGifId, WEAPON_AMMO } from './models/ammo';
 import type { Clip, Cue } from './animation/Clip';
 import { RELOADS } from './animation/reloads';
@@ -310,7 +310,9 @@ export class WeaponManager {
     this.aimToggled = false;
     this.inspectTime = 0;
     this.armRecoil.reset();
-    this.viewmodel.equip(item?.def ?? null, DRAW_CLIP, time);
+    const category = item?.def.category;
+    const twoHanded = !!category && category !== 'melee' && category !== 'throwable';
+    this.viewmodel.equip(item?.def ?? null, drawClip(twoHanded, category === 'heavy'), time);
     this.d.player.speedMultiplier = item?.def.moveSpeed ?? 1;
   }
 
@@ -365,7 +367,7 @@ export class WeaponManager {
     const anim = item ? RELOADS[item.def.id] : undefined;
     let reload: { clip: Clip; t: number; key: string; fromEmpty: boolean } | null = null;
     if (r && anim) {
-      const clip = anim.kind === 'magazine' ? anim.clip : anim[r.phase === 'full' ? 'start' : r.phase];
+      const clip = anim.kind === 'magazine' ? ((!r.fromEmpty && anim.tactical) || anim.clip) : anim[r.phase === 'full' ? 'start' : r.phase];
       reload = { clip, t: r.progress, key: `${r.phase}:${gun!.ammo}`, fromEmpty: r.fromEmpty };
     }
 
@@ -373,6 +375,8 @@ export class WeaponManager {
       dt,
       time,
       slide: this.d.player.slideAmount,
+      vertical: this.d.player.velocity.y,
+      crouch: this.d.player.crouchAmount,
       moveSpeed: this.d.player.horizontalSpeed,
       strafe: this.d.player.strafeRelative,
       forward: this.d.player.forwardSpeed,

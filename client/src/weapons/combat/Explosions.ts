@@ -12,7 +12,7 @@ export interface ExplosionHooks {
   /** Cegueira por granada de luz (0..1). */
   blind(amount: number): void;
   /** Onda de choque: destrói blocos e empurra objetos com física. */
-  blast?(center: THREE.Vector3, radius: number): void;
+  blast?(center: THREE.Vector3, radius: number, source: DetonationSource): void;
   /** Qualquer detonação (inclusive luz e fogo) — o modo online reporta as do jogador. */
   detonated?(kind: BlastKind, pos: THREE.Vector3, source: DetonationSource): void;
 }
@@ -21,6 +21,8 @@ export interface ExplosionHooks {
 export interface DetonationSource {
   id: number;
   remote: boolean;
+  /** Online: id de quem lançou (projétil de outro jogador). */
+  owner?: string;
 }
 
 interface FireZone {
@@ -56,8 +58,12 @@ export class Explosions {
     }
   }
 
+  /** Origem da detonação em andamento (repassada à onda de choque). */
+  private source: DetonationSource = { id: 0, remote: false };
+
   detonate(kind: BlastKind, pos: THREE.Vector3, normal: THREE.Vector3 = UP, source: DetonationSource = { id: 0, remote: false }): void {
     this.hooks.detonated?.(kind, pos, source);
+    this.source = source;
     const dist = this.camera.position.distanceTo(pos);
     const near = Math.max(0, 1 - dist / 25);
     if (kind === 'flash') return this.flash(pos, dist);
@@ -74,7 +80,7 @@ export class Explosions {
     this.lightFlash(pos, 30 * big, 0.25, 0xffa04a);
     this.audio.play('explosion', Math.max(0.25, 1 - dist / 70));
     this.hooks.shake(near * big);
-    this.hooks.blast?.(pos, 4.5 * big);
+    this.hooks.blast?.(pos, 4.5 * big, this.source);
   }
 
   update(dt: number, time: number): void {

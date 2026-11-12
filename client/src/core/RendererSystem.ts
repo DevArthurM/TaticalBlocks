@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { CAMERA, VIEWMODEL, WORLD_COLORS } from '../config/constants';
+import { CAMERA, VIEWMODEL } from '../config/constants';
+import { ATMOSPHERE } from '../world/Atmosphere';
+import { setHdrGlow } from './Glow';
+import { type Atmosphere, PostFX, type PostOptions } from './post/PostFX';
 import { ViewmodelFocus } from './ViewmodelFocus';
 import { WorldBlur } from './WorldBlur';
 
@@ -26,6 +29,13 @@ export class RendererSystem {
   /** 0..1 — fundo desfocado (personalização da arma). */
   worldBlur = 0;
   private readonly worldBlurPass: WorldBlur;
+  /** Pós-processamento HDR ("shaders"): desligado = desenho direto na tela, como antes. */
+  private readonly post: PostFX;
+  private shaders = false;
+  /** Sol e névoa do mapa (sem isso o pós-processamento não roda). */
+  atmosphere: Atmosphere | null = null;
+  /** Névoa simples do three.js, usada só com o pós-processamento desligado. */
+  private legacyFog: THREE.Scene['fog'] = null;
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -40,8 +50,9 @@ export class RendererSystem {
     // as matrizes de mundo são atualizadas uma vez por quadro em render()
     this.scene.matrixWorldAutoUpdate = false;
 
-    this.scene.background = new THREE.Color(WORLD_COLORS.sky);
-    this.scene.fog = new THREE.Fog(WORLD_COLORS.sky, WORLD_COLORS.fogNear, WORLD_COLORS.fogFar);
+    const fog = ATMOSPHERE.legacyFog;
+    this.scene.background = new THREE.Color(fog.color);
+    this.scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
 
     const aspect = window.innerWidth / window.innerHeight;
     this.camera = new THREE.PerspectiveCamera(CAMERA.fov, aspect, CAMERA.near, CAMERA.far);
@@ -51,6 +62,7 @@ export class RendererSystem {
     this.viewmodelCamera = new THREE.PerspectiveCamera(VIEWMODEL.fov, aspect, 0.01, 10);
     this.vmFocus = new ViewmodelFocus(this.renderer);
     this.worldBlurPass = new WorldBlur(this.renderer);
+    this.post = new PostFX(this.renderer);
 
     this.resize();
     window.addEventListener('resize', this.resize);
@@ -85,6 +97,12 @@ export class RendererSystem {
     }
   }
 
+  private fpsTarget = 60;
+  /** Limite de FPS do jogador (0 = sem limite): a resolução dinâmica mira nele, não em 60. */
+  setFpsLimit(limit: number): void {
+    this.fpsTarget = limit > 0 ? Math.min(60, limit) : 60;
+  }
+
   /** Fator atual da resolução dinâmica (1 = sem redução). */
   get dynamicResolution(): number {
     return this.dynamicScale;
@@ -106,7 +124,9 @@ export class RendererSystem {
     d.ceilingAge += frameDt;
     if (d.ceilingAge > 30) d.ceiling = 1;
     if (d.cooldown > 0) return;
-    if (d.avg > 1 / 50 && this.dynamicScale > DYN_MIN) {
+    // alvo de 60 FPS (ou o limite escolhido, se for menor): cai abaixo de ~83% → reduz
+    const target = this.fpsTarget;
+    if (d.avg > 1 / (target * 0.83) && this.dynamicScale > DYN_MIN) {
       // caiu logo depois de subir: esse nível não se sustenta
       if (d.clock - d.lastRaise < 5) {
         d.ceiling = this.dynamicScale - DYN_STEP_UP;
@@ -116,7 +136,7 @@ export class RendererSystem {
       this.applyPixelRatio();
       d.cooldown = 1;
       d.goodFor = 0;
-    } else if (d.avg < 1 / 57) {
+    } else if (d.avg < 1 / (target * 0.95)) {
       d.goodFor += frameDt;
       const next = Math.min(1, d.ceiling, this.dynamicScale + DYN_STEP_UP);
       if (d.goodFor > 3 && next > this.dynamicScale + 1e-3) {
@@ -163,6 +183,20 @@ export class RendererSystem {
     this.render();
   }
 
+  /**
+   * Liga/desliga o pós-processamento e escolhe os efeitos. Com ele ligado a névoa
+   * passa a ser a volumétrica da composição (a do three.js sai dos materiais) e os
+   * materiais emissivos ganham brilho HDR para o bloom.
+   */
+  setPost(enabled: boolean, options: PostOptions): void {
+    this.post.configure(options);
+    if (enabled === this.shaders) return;
+    this.shaders = enabled;
+    if (this.scene.fog) this.legacyFog = this.scene.fog;
+    this.scene.fog = enabled ? null : this.legacyFog;
+    setHdrGlow(enabled);
+  }
+
   /** Liga/desliga sombras e define a resolução do mapa de sombra do sol. */
   setShadows(sun: THREE.DirectionalLight, mapSize: number): void {
     const enabled = mapSize > 0;
@@ -204,6 +238,14 @@ export class RendererSystem {
   render(): void {
     this.scene.updateMatrixWorld();
     this.beforeRender();
+    if (this.shaders && this.atmosphere) {
+      this.post.render(this.scene, this.camera, this.atmosphere, this.worldBlur, (target) => {
+        if (this.focus > 0.01) this.vmFocus.render(this.viewmodelScene, this.viewmodelCamera, this.focus, target);
+        else this.renderer.render(this.viewmodelScene, this.viewmodelCamera);
+      });
+      return;
+    }
+    this.renderer.setRenderTarget(null);
     this.renderer.clear();
     if (this.worldBlur > 0.01) this.worldBlurPass.render(this.scene, this.camera, this.worldBlur);
     else this.renderer.render(this.scene, this.camera);
@@ -219,6 +261,7 @@ export class RendererSystem {
     const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.vmFocus?.setSize(size.x, size.y);
     this.worldBlurPass?.setSize(size.x, size.y);
+    this.post?.setSize(size.x, size.y);
     for (const cam of [this.camera, this.viewmodelCamera]) {
       cam.aspect = w / h;
       cam.updateProjectionMatrix();

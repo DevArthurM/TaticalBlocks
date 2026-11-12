@@ -1,12 +1,16 @@
 import * as THREE from 'three';
+import { ATMOSPHERE } from './Atmosphere';
 
-/** Sol direcional com sombras suaves + luz hemisférica para preencher. */
+/**
+ * Sol direcional quente com sombras suaves + luz hemisférica azulada do céu.
+ * O contraste entre os dois é o que dá o ar de "shader": sol dourado, sombra fria.
+ */
 export function createLighting(scene: THREE.Scene, mapSize: number): THREE.DirectionalLight {
-  const hemi = new THREE.HemisphereLight(0xe8f0ff, 0x7d838c, 0.85);
+  const hemi = new THREE.HemisphereLight(ATMOSPHERE.skyLight, ATMOSPHERE.groundLight, ATMOSPHERE.ambient);
   scene.add(hemi);
 
-  const sun = new THREE.DirectionalLight(0xfff3e2, 3.2);
-  sun.position.set(45, 38, 26);
+  const sun = new THREE.DirectionalLight(ATMOSPHERE.sunLight, ATMOSPHERE.sunIntensity);
+  sun.position.copy(ATMOSPHERE.sunDir).multiplyScalar(65);
   sun.castShadow = true;
   sun.shadow.mapSize.set(4096, 4096);
   const extent = mapSize / 2 + 6;

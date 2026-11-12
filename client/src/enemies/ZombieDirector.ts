@@ -460,7 +460,7 @@ export class ZombieDirector {
   }
 
   /** Explosão: dano por distância; mortos viram ragdoll arremessado. */
-  blast(center: THREE.Vector3, radius: number, damage: number): void {
+  blast(center: THREE.Vector3, radius: number, damage: number, by = ''): void {
     // online: só o anfitrião aplica dano de explosão nos zumbis
     const simulate = !this.net || this.net.host;
     for (const z of this.zombies) {
@@ -484,7 +484,7 @@ export class ZombieDirector {
       if (z.hp <= 0 || z.dead) {
         z.state = 'dead';
         const out = this.tmp2.subVectors(z.center(this.tmp), center).normalize();
-        this.kill(z, 'chest', z.center(this.tmp), out.multiplyScalar(0));
+        this.kill(z, 'chest', z.center(this.tmp), out.multiplyScalar(0), undefined, by);
         this.ragdolls[this.ragdolls.length - 1]?.ragdoll.blast(center, radius * 1.2, 9 * k + 3);
         this.bleed(z.center(this.tmp), 20, 4);
       }
